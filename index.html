@@ -935,31 +935,27 @@ function rowToStop(r) {
 }
 
 // ── CONTEXT-AWARE ROW PARSER ──
-// Detects trip breaks by looking at neighboring rows:
-// A row where SHIPPER is empty, but rows before AND after it have real stops = trip divider.
+// Trip break = a row that has a STOP number but an empty SHIPPER.
+// e.g. {"STOP":"STOP 89", "SHIPPER":"", ...everything else empty}
 function parseRows(json) {
   const result = [];
   for (let i = 0; i < json.length; i++) {
     const r = json[i];
     const shipper = (r['SHIPPER'] || '').trim();
-    const stopVal = (r['STOP'] || '').trim();
+    const stopVal  = (r['STOP']    || '').trim();
 
-    if (!shipper && !stopVal) {
-      // Potential trip break — check neighbors
-      const prevHasStop = result.length > 0 && result[result.length - 1] && !result[result.length - 1].tripBreak;
-      let nextHasStop = false;
-      for (let j = i + 1; j < json.length; j++) {
-        const ns = (json[j]['SHIPPER'] || '').trim();
-        const nst = (json[j]['STOP'] || '').trim();
-        if (ns) { nextHasStop = true; break; }
-        if (!ns && !nst) continue; // another empty row, keep looking
-        break;
-      }
-      if (prevHasStop && nextHasStop) {
+    // Row has a STOP value but no SHIPPER = trip divider
+    if (stopVal && !shipper) {
+      // Only insert a break if previous entry was a real stop (avoid double-breaks)
+      const prev = result[result.length - 1];
+      if (prev && !prev.tripBreak) {
         result.push({ tripBreak: true });
       }
       continue;
     }
+
+    // Fully empty row — skip
+    if (!stopVal && !shipper) continue;
 
     const parsed = rowToStop(r);
     if (parsed) result.push(parsed);
