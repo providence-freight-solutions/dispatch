@@ -560,6 +560,34 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
+  /* ── TRIP HEADER ── */
+  .trip-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px 6px;
+    background: var(--dark3);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .trip-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  .trip-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+
   /* ── MODAL (mobile stop detail popup) ── */
   .modal-overlay {
     display: none;
@@ -728,7 +756,7 @@ function startPolling() {
       if (newHash === lastDataHash) return; // nothing changed
       lastDataHash = newHash;
 
-      const parsed = json.map(rowToStop).filter(Boolean);
+      const parsed = parseRows(json);
       if (!parsed.length) return;
 
       const prevRAW = RAW;
@@ -761,10 +789,9 @@ function startPolling() {
 }
 
 function getGroupFromRAW(rawData, key) {
-  // Rebuild groups from a given RAW snapshot for comparison
   const d = DRIVERS.find(x => x.id === activeDriver);
   if (!d) return null;
-  const rows = rawData.filter(r => r.stop >= d.range[0] && r.stop <= d.range[1]);
+  const rows = rawData.filter(r => !r.tripBreak && r.stop >= d.range[0] && r.stop <= d.range[1]);
   const byAddr = {};
   rows.forEach(r => {
     const k = r.address.trim().toLowerCase().replace(/\s+/g,' ');
@@ -836,6 +863,7 @@ function rowToStop(r) {
 
   const stopVal = get('STOP');
   if (!stopVal || stopVal.toUpperCase() === 'X') return null;
+
   const stopMatch = stopVal.match(/\d+/);
   if (!stopMatch) return null;
   const stopNum = parseInt(stopMatch[0]);
@@ -847,31 +875,41 @@ function rowToStop(r) {
   const weight = parseFloat(wRaw) || 0;
   const pl = parseFloat(get('PL')) || 0;
 
-  // Use raw datetime string exactly as it appears in the sheet — no timezone conversion
+  // Parse pickup datetime from display value (e.g. "5/6/2026 6:00 AM" or "5/6/2026 6:00:00")
+  // getDisplayValues() in Apps Script returns the cell text exactly as shown — no timezone shift
   let pickupDateTime = '';
   const pdRaw = get('PICKUP DATE & TIME');
   if (pdRaw) {
-    // Try to reformat "5/5/2026 6:00:00" → "5/5 6:00 AM" without any Date() conversion
-    const match = pdRaw.match(/^(\d+\/\d+)(?:\/\d+)?(?:\s+(\d+):(\d+)(?::\d+)?)?/);
-    if (match) {
-      const datePart = match[1]; // "5/5"
-      const hStr = match[2];
-      const mStr = match[3];
-      if (hStr !== undefined) {
-        const h = parseInt(hStr);
-        const m = parseInt(mStr);
-        if (h === 0 && m === 0) {
-          pickupDateTime = datePart;
+    // Match "M/D/YYYY H:MM AM/PM" or "M/D/YYYY H:MM:SS" or "M/D/YYYY"
+    const m1 = pdRaw.match(/^(\d{1,2})\/( \d{1,2})(?:\/\d{2,4})?(?:[,\s]+(.+))?$/);
+    const m2 = pdRaw.match(/^(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?:\s+(\d{1,2}):(\d{2})(?::\d{2})?(?:\s*(AM|PM))?)?/i);
+    if (m2) {
+      const month = m2[1];
+      const day   = m2[2];
+      const hRaw  = m2[3];
+      const mRaw  = m2[4];
+      const ampm  = m2[5] ? m2[5].toUpperCase() : null;
+      if (hRaw !== undefined) {
+        let h = parseInt(hRaw);
+        const mins = parseInt(mRaw) || 0;
+        let suffix = ampm;
+        if (!suffix) {
+          // 24-hour format — convert to 12h
+          suffix = h >= 12 ? 'PM' : 'AM';
+          h = h % 12 || 12;
+        }
+        if (h === 12 && mins === 0 && suffix === 'AM') {
+          // midnight — just show date
+          pickupDateTime = month + '/' + day;
         } else {
-          const ampm = h >= 12 ? 'PM' : 'AM';
-          const h12 = h % 12 || 12;
-          const mPad = m > 0 ? ':' + String(m).padStart(2,'0') : '';
-          pickupDateTime = datePart + ' ' + h12 + mPad + ' ' + ampm;
+          const mStr = mins > 0 ? ':' + String(mins).padStart(2,'0') : '';
+          pickupDateTime = month + '/' + day + ' ' + h + mStr + ' ' + suffix;
         }
       } else {
-        pickupDateTime = datePart;
+        pickupDateTime = month + '/' + day;
       }
     } else {
+      // Fallback — show whatever the sheet gave us
       pickupDateTime = pdRaw;
     }
   }
@@ -896,20 +934,103 @@ function rowToStop(r) {
   };
 }
 
+// ── CONTEXT-AWARE ROW PARSER ──
+// Detects trip breaks by looking at neighboring rows:
+// A row where SHIPPER is empty, but rows before AND after it have real stops = trip divider.
+function parseRows(json) {
+  const result = [];
+  for (let i = 0; i < json.length; i++) {
+    const r = json[i];
+    const shipper = (r['SHIPPER'] || '').trim();
+    const stopVal = (r['STOP'] || '').trim();
+
+    if (!shipper && !stopVal) {
+      // Potential trip break — check neighbors
+      const prevHasStop = result.length > 0 && result[result.length - 1] && !result[result.length - 1].tripBreak;
+      let nextHasStop = false;
+      for (let j = i + 1; j < json.length; j++) {
+        const ns = (json[j]['SHIPPER'] || '').trim();
+        const nst = (json[j]['STOP'] || '').trim();
+        if (ns) { nextHasStop = true; break; }
+        if (!ns && !nst) continue; // another empty row, keep looking
+        break;
+      }
+      if (prevHasStop && nextHasStop) {
+        result.push({ tripBreak: true });
+      }
+      continue;
+    }
+
+    const parsed = rowToStop(r);
+    if (parsed) result.push(parsed);
+  }
+  return result;
+}
+
 // ── HELPERS ──
 function getStopsForDriver(id) {
   const d = DRIVERS.find(x => x.id === id);
   if (!d) return [];
-  const rows = RAW.filter(r => r.stop >= d.range[0] && r.stop <= d.range[1]);
-  const byAddr = {};
+
+  // Get all rows for this driver including trip break markers
+  const rows = RAW.filter(r => r.tripBreak || (r.stop >= d.range[0] && r.stop <= d.range[1]));
+
+  // Split into trips at each tripBreak marker
+  const trips = [[]];
   rows.forEach(r => {
-    const key = r.address.trim().toLowerCase().replace(/\s+/g,' ');
-    if (!byAddr[key]) byAddr[key] = {address:r.address, phone:r.phone, shipper:r.shipper, orders:[], firstStop:r.stop};
-    const g = byAddr[key];
-    g.orders.push(r);
-    if (r.stop < g.firstStop) { g.firstStop = r.stop; g.shipper = r.shipper; g.phone = r.phone || g.phone; }
+    if (r.tripBreak) {
+      // Only start a new trip if current trip has stops
+      if (trips[trips.length - 1].length > 0) trips.push([]);
+    } else {
+      trips[trips.length - 1].push(r);
+    }
   });
-  return Object.values(byAddr).sort((a,b) => a.firstStop - b.firstStop);
+
+  // Consolidate each trip's stops by address, then flatten with trip metadata
+  const result = [];
+  trips.forEach((tripRows, tripIdx) => {
+    if (!tripRows.length) return;
+    const byAddr = {};
+    tripRows.forEach(r => {
+      const key = r.address.trim().toLowerCase().replace(/\s+/g,' ');
+      if (!byAddr[key]) byAddr[key] = {address:r.address, phone:r.phone, shipper:r.shipper, orders:[], firstStop:r.stop, tripIndex:tripIdx};
+      const g = byAddr[key];
+      g.orders.push(r);
+      if (r.stop < g.firstStop) { g.firstStop = r.stop; g.shipper = r.shipper; g.phone = r.phone || g.phone; }
+    });
+    const sorted = Object.values(byAddr).sort((a,b) => a.firstStop - b.firstStop);
+    sorted.forEach(g => result.push(g));
+  });
+
+  return result;
+}
+
+// Returns trips as separate arrays (for sidebar grouping)
+function getTripsForDriver(id) {
+  const d = DRIVERS.find(x => x.id === id);
+  if (!d) return [];
+
+  const rows = RAW.filter(r => r.tripBreak || (r.stop >= d.range[0] && r.stop <= d.range[1]));
+  const trips = [[]];
+  rows.forEach(r => {
+    if (r.tripBreak) {
+      if (trips[trips.length - 1].length > 0) trips.push([]);
+    } else {
+      trips[trips.length - 1].push(r);
+    }
+  });
+
+  return trips.filter(t => t.length > 0).map((tripRows, tripIdx) => {
+    const byAddr = {};
+    tripRows.forEach(r => {
+      const key = r.address.trim().toLowerCase().replace(/\s+/g,' ');
+      if (!byAddr[key]) byAddr[key] = {address:r.address, phone:r.phone, shipper:r.shipper, orders:[], firstStop:r.stop, tripIndex:tripIdx};
+      const g = byAddr[key];
+      g.orders.push(r);
+      if (r.stop < g.firstStop) { g.firstStop = r.stop; g.shipper = r.shipper; g.phone = r.phone || g.phone; }
+    });
+    return Object.values(byAddr).sort((a,b) => a.firstStop - b.firstStop);
+  });
 }
 
 function gKey(g) { return g.address.trim().toLowerCase().replace(/\s+/g,' '); }
@@ -983,7 +1104,7 @@ function renderSidebar() {
 // ── RENDER HEADER ──
 function renderHeader() {
   const tabsHtml = DRIVERS.map(d => {
-    const groups = getStopsForDriver(d.id);
+    const groups = getTripsForDriver(d.id).flat();
     const total = groups.length;
     const doneCount = groups.filter(g=>isDone(g)).length;
     const pct = total ? (doneCount/total*100) : 0;
@@ -994,10 +1115,10 @@ function renderHeader() {
   }).join('');
   document.getElementById('driverTabs').innerHTML = tabsHtml;
 
-  const groups = getStopsForDriver(activeDriver);
+  const groups = getTripsForDriver(activeDriver).flat();
   const doneCount = groups.filter(g=>isDone(g)).length;
   const dr = DRIVERS.find(x=>x.id===activeDriver);
-  const totalW = dr ? RAW.filter(r=>r.stop>=dr.range[0]&&r.stop<=dr.range[1]).reduce((s,o)=>s+(o.weight||0),0) : 0;
+  const totalW = dr ? RAW.filter(r=>!r.tripBreak&&r.stop>=dr.range[0]&&r.stop<=dr.range[1]).reduce((s,o)=>s+(o.weight||0),0) : 0;
 
   document.getElementById('headerStats').innerHTML = `
     <div class="stat"><div class="stat-val">${doneCount}/${groups.length}</div><div class="stat-lbl">Stops</div></div>
@@ -1012,7 +1133,7 @@ function buildDetailHTML(key, forModal) {
   if (!g) return '';
 
   const d = isDone(g);
-  const allGroups = getStopsForDriver(activeDriver);
+  const allGroups = getTripsForDriver(activeDriver).flat();
   const doneCount = allGroups.filter(x=>isDone(x)).length;
   const pct = allGroups.length ? doneCount/allGroups.length*100 : 0;
 
@@ -1217,7 +1338,7 @@ async function loadData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     if (!Array.isArray(json) || !json.length) throw new Error('Sheet returned no data');
-    const parsed = json.map(rowToStop).filter(Boolean);
+    const parsed = parseRows(json);
     if (!parsed.length) throw new Error('No stop data found. Keys: ' + Object.keys(json[0]).join(', '));
     RAW = parsed;
     syncDone(json);
