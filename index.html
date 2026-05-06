@@ -748,6 +748,7 @@ function startPolling() {
           const inner = document.getElementById('modalInner');
           if (overlay.classList.contains('open') && inner) {
             inner.innerHTML = buildDetailHTML(activeKey, true);
+            wireDoneButton(inner);
           }
         } else {
           renderDetail(activeKey);
@@ -1021,76 +1022,95 @@ function buildDetailHTML(key, forModal) {
 
   const mapUrl = 'https://maps.google.com/?q=' + encodeURIComponent(g.address);
   const phoneRaw = g.phone || '';
-  const phone = phoneRaw && !/^[a-z]/i.test(phoneRaw) ? phoneRaw.replace(/\D/g,'') : null;
+  const phone = phoneRaw && !/^[a-z]/i.test(phoneRaw) ? phoneRaw.replace(/[^0-9]/g,'') : null;
 
   const pickupDates = [...new Set(g.orders.map(o=>o.pickupDateTime).filter(Boolean))].join(', ');
   const skip = ['CONF RDY','NEED','OK','CONF','REQ',''];
   const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
 
-  let alerts = '';
-  if (warnFlag) {
-    const wo = g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'));
-    alerts = '<div class="alert-banner alert-warn">&#9888; ' + (wo ? wo.appt : '') + ' — Verify before pickup</div>';
-  }
+  const warnOrder = g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'));
+  const alertsHTML = warnFlag
+    ? '<div class="alert-banner alert-warn">&#9888; ' + (warnOrder ? warnOrder.appt : '') + ' &mdash; Verify before pickup</div>'
+    : '';
+  const apptHTML = apptInfos.length
+    ? '<div class="appt-block">&#128203; ' + apptInfos.join(' &middot; ') + '</div>'
+    : '';
 
-  const apptBlock = apptInfos.length ? '<div class="appt-block">&#128203; ' + apptInfos.join(' · ') + '</div>' : '';
-  const safeKey = key.replace(/'/g, "\'");
   const progressBar = forModal ? '' : '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>';
 
-  const ordersHtml = g.orders.map(o => {
+  const ordersHtml = g.orders.map(function(o) {
     const tempCls = getTempClass(o);
-    const chips = tempCls ? chip(tempCls, tempCls) : '';
-    return '<div class="order-card">' +
-      '<div>' +
-        '<div class="order-customer">' + o.customer + '</div>' +
-        (o.consignee && o.consignee !== o.customer ? '<div class="order-consignee">→ ' + o.consignee + '</div>' : '') +
-        '<div class="order-dest">▸ ' + o.delCity + ', ' + o.delSt + '</div>' +
-        '<div class="order-meta">' +
-          (o.po ? '<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">' + o.po + '</div></div>' : '') +
-          (o.bol ? '<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">' + o.bol + '</div></div>' : '') +
-          (o.shipRef ? '<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">' + o.shipRef + '</div></div>' : '') +
-          (o.pickupDateTime ? '<div class="meta-field"><div class="meta-lbl">Pickup Date &amp; Time</div><div class="meta-val">' + o.pickupDateTime + '</div></div>' : '') +
-        '</div>' +
-        (chips ? '<div class="order-chips">' + chips + '</div>' : '') +
-      '</div>' +
-      '<div class="order-right">' +
-        '<div class="order-wt">' + fmtW(o.weight) + '</div>' +
-        '<div class="order-pl">' + fmtPL(o.pl) + '</div>' +
-      '</div>' +
-    '</div>';
+    const chipsHTML = tempCls ? chip(tempCls, tempCls) : '';
+    return '<div class="order-card">'
+      + '<div>'
+        + '<div class="order-customer">' + o.customer + '</div>'
+        + (o.consignee && o.consignee !== o.customer ? '<div class="order-consignee">&rarr; ' + o.consignee + '</div>' : '')
+        + '<div class="order-dest">&#9656; ' + o.delCity + ', ' + o.delSt + '</div>'
+        + '<div class="order-meta">'
+          + (o.po      ? '<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">' + o.po      + '</div></div>' : '')
+          + (o.bol     ? '<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">'  + o.bol     + '</div></div>' : '')
+          + (o.shipRef ? '<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">'+ o.shipRef + '</div></div>' : '')
+          + (o.pickupDateTime ? '<div class="meta-field"><div class="meta-lbl">Pickup Date &amp; Time</div><div class="meta-val">' + o.pickupDateTime + '</div></div>' : '')
+        + '</div>'
+        + (chipsHTML ? '<div class="order-chips">' + chipsHTML + '</div>' : '')
+      + '</div>'
+      + '<div class="order-right">'
+        + '<div class="order-wt">' + fmtW(o.weight) + '</div>'
+        + '<div class="order-pl">' + fmtPL(o.pl) + '</div>'
+      + '</div>'
+    + '</div>';
   }).join('');
 
-  return progressBar +
-    '<div class="detail-hdr">' +
-      '<div>' +
-        '<div class="detail-stopnum">' + stopLabel(g.orders) + '</div>' +
-        '<div class="detail-title">' + g.shipper + '</div>' +
-        '<div class="detail-addr">' + g.address + '</div>' +
-      '</div>' +
-      '<div class="detail-actions">' +
-        (g.address ? '<a href="' + mapUrl + '" target="_blank" class="btn btn-nav">&#128205; Navigate</a>' : '') +
-        (phone ? '<a href="tel:' + phone + '" class="btn btn-call">&#128222; Call</a>' : '') +
-        '<button class="btn ' + (d ? 'btn-undone' : 'btn-done') + '" onclick="toggleDone('' + safeKey + '')">' +
-          (d ? '↩ Undo' : '✓ Done') +
-        '</button>' +
-      '</div>' +
-    '</div>' +
-    alerts +
-    apptBlock +
-    '<div class="summary-bar">' +
-      '<div class="sum-item"><div class="sum-lbl">Orders</div><div class="sum-val">' + g.orders.length + '</div></div>' +
-      '<div class="sum-item"><div class="sum-lbl">Total Weight</div><div class="sum-val">' + fmtW(totalW) + '</div></div>' +
-      '<div class="sum-item"><div class="sum-lbl">Total Pallets</div><div class="sum-val">' + (totalPL > 0 ? totalPL + ' PLT' : '—') + '</div></div>' +
-      (pickupDates ? '<div class="sum-item"><div class="sum-lbl">Pickup Date &amp; Time</div><div class="sum-val">' + pickupDates + '</div></div>' : '') +
-    '</div>' +
-    (phone ? '<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">' + g.phone + '</div></div><a href="tel:' + phone + '" class="btn btn-call">Call</a></div>' : '') +
-    '<div class="section-lbl">Orders at this location (' + g.orders.length + ')</div>' +
-    '<div class="orders-list">' + ordersHtml + '</div>';
+  // Use data-key attribute on done button — wired up after render via wireDoneButton()
+  const doneBtn = '<button class="btn ' + (d ? 'btn-undone' : 'btn-done') + '" id="doneBtn" data-key="' + encodeURIComponent(key) + '">'
+    + (d ? '&#8617; Undo' : '&#10003; Done')
+    + '</button>';
+
+  const navBtn  = g.address ? '<a href="' + mapUrl + '" target="_blank" class="btn btn-nav">&#128205; Navigate</a>' : '';
+  const callBtn = phone ? '<a href="tel:' + phone + '" class="btn btn-call">&#128222; Call</a>' : '';
+  const phoneBlock = phone
+    ? '<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">' + g.phone + '</div></div><a href="tel:' + phone + '" class="btn btn-call">Call</a></div>'
+    : '';
+
+  return progressBar
+    + '<div class="detail-hdr">'
+      + '<div>'
+        + '<div class="detail-stopnum">' + stopLabel(g.orders) + '</div>'
+        + '<div class="detail-title">' + g.shipper + '</div>'
+        + '<div class="detail-addr">' + g.address + '</div>'
+      + '</div>'
+      + '<div class="detail-actions">' + navBtn + callBtn + doneBtn + '</div>'
+    + '</div>'
+    + alertsHTML
+    + apptHTML
+    + '<div class="summary-bar">'
+      + '<div class="sum-item"><div class="sum-lbl">Orders</div><div class="sum-val">' + g.orders.length + '</div></div>'
+      + '<div class="sum-item"><div class="sum-lbl">Total Weight</div><div class="sum-val">' + fmtW(totalW) + '</div></div>'
+      + '<div class="sum-item"><div class="sum-lbl">Total Pallets</div><div class="sum-val">' + (totalPL > 0 ? totalPL + ' PLT' : '&mdash;') + '</div></div>'
+      + (pickupDates ? '<div class="sum-item"><div class="sum-lbl">Pickup Date &amp; Time</div><div class="sum-val">' + pickupDates + '</div></div>' : '')
+    + '</div>'
+    + phoneBlock
+    + '<div class="section-lbl">Orders at this location (' + g.orders.length + ')</div>'
+    + '<div class="orders-list">' + ordersHtml + '</div>';
 }
+
+// Wire the Done button after innerHTML is set (avoids inline onclick quoting issues)
+function wireDoneButton(container) {
+  const btn = container ? container.querySelector('#doneBtn') : document.getElementById('doneBtn');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      const key = decodeURIComponent(btn.dataset.key);
+      toggleDone(key);
+    });
+  }
+}
+
 
 // ── RENDER DETAIL (desktop panel) ──
 function renderDetail(key) {
-  document.getElementById('mainPanel').innerHTML = buildDetailHTML(key, false);
+  const panel = document.getElementById('mainPanel');
+  panel.innerHTML = buildDetailHTML(key, false);
+  wireDoneButton(panel);
 }
 
 // ── INTERACTIONS ──
@@ -1157,6 +1177,7 @@ function toggleDone(key) {
       const inner = document.getElementById('modalInner');
       if (inner && document.getElementById('modalOverlay').classList.contains('open')) {
         inner.innerHTML = buildDetailHTML(key, true);
+        wireDoneButton(inner);
       }
     } else {
       renderDetail(key);
