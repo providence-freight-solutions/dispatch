@@ -546,8 +546,8 @@
   .order-meta { display: flex; gap: 16px; flex-wrap: wrap; }
 
   .meta-field { display: flex; flex-direction: column; gap: 2px; }
-  .meta-lbl { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text3); }
-  .meta-val { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text2); }
+  .meta-lbl { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text3); }
+  .meta-val { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text2); }
 
   .order-right { text-align: right; }
   .order-wt { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--text); }
@@ -560,12 +560,78 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
+  /* ── MODAL (mobile stop detail popup) ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 200;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal-sheet {
+    background: var(--dark1);
+    border-radius: 12px 12px 0 0;
+    border-top: 2px solid var(--gold);
+    width: 100%;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 0 0 env(safe-area-inset-bottom, 16px);
+    animation: slideUp 0.25s ease;
+  }
+
+  @keyframes slideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .modal-handle {
+    width: 40px; height: 4px;
+    background: var(--border2);
+    border-radius: 2px;
+    margin: 12px auto 0;
+  }
+
+  .modal-inner {
+    padding: 16px 18px 24px;
+  }
+
+  .modal-close {
+    position: absolute;
+    top: 14px; right: 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--text3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+
   @media (max-width: 680px) {
     .app { grid-template-columns: 1fr; }
-    .sidebar { height: auto; position: static; }
-    .main { padding: 16px; }
-    header { flex-wrap: wrap; height: auto; padding: 10px; }
+    .sidebar { height: auto; position: static; border-right: none; }
+    .main { display: none; } /* hidden on mobile — detail shown in modal */
+    header { flex-wrap: wrap; height: auto; padding: 10px 12px; gap: 8px; }
     .header-stats { display: none; }
+    .logo-text { font-size: 15px; }
+    .logo-sub { font-size: 9px; }
+    .logo-img { height: 32px; width: 32px; }
+    .driver-tabs { gap: 3px; }
+    .driver-tab { font-size: 11px; padding: 5px 10px; }
+    .stop-item { padding: 14px 14px; }
+    .stop-shipper { font-size: 15px; }
+    .stop-addr { font-size: 12px; }
+    .stop-wt { font-size: 12px; }
+    .stop-num { font-size: 11px; }
+    .order-count { font-size: 11px; }
+    /* make stop list taller and touch-friendly */
+    .sidebar { min-height: calc(100vh - 80px); }
   }
 </style>
 </head>
@@ -582,6 +648,15 @@
   <div class="driver-tabs" id="driverTabs"></div>
   <div class="header-stats" id="headerStats"></div>
 </header>
+
+<!-- ── MOBILE MODAL ── -->
+<div class="modal-overlay" id="modalOverlay" onclick="handleOverlayClick(event)">
+  <div class="modal-sheet" id="modalSheet">
+    <div class="modal-handle"></div>
+    <button class="modal-close" onclick="closeModal()">✕ CLOSE</button>
+    <div class="modal-inner" id="modalInner"></div>
+  </div>
+</div>
 
 <div class="app">
   <aside class="sidebar">
@@ -663,13 +738,20 @@ function startPolling() {
       renderSidebar();
 
       if (activeKey) {
-        // Check if the currently viewed stop changed
         const prevGroup = getGroupFromRAW(prevRAW, activeKey);
         const newGroup = getStopsForDriver(activeDriver).find(x => gKey(x) === activeKey);
         const changed = prevGroup && newGroup &&
           JSON.stringify(prevGroup.orders) !== JSON.stringify(newGroup.orders);
 
-        renderDetail(activeKey);
+        if (isMobile()) {
+          const overlay = document.getElementById('modalOverlay');
+          const inner = document.getElementById('modalInner');
+          if (overlay.classList.contains('open') && inner) {
+            inner.innerHTML = buildDetailHTML(activeKey, true);
+          }
+        } else {
+          renderDetail(activeKey);
+        }
 
         if (changed) showUpdateToast();
       }
@@ -764,29 +846,33 @@ function rowToStop(r) {
   const weight = parseFloat(wRaw) || 0;
   const pl = parseFloat(get('PL')) || 0;
 
-  // Format PICKUP DATE & TIME nicely: "5/6 6:00 AM" or just "5/6" if midnight
+  // Use raw datetime string exactly as it appears in the sheet — no timezone conversion
   let pickupDateTime = '';
   const pdRaw = get('PICKUP DATE & TIME');
   if (pdRaw) {
-    try {
-      const d = new Date(pdRaw);
-      if (!isNaN(d)) {
-        const month = d.getMonth() + 1;
-        const day = d.getDate();
-        const hours = d.getHours();
-        const mins = d.getMinutes();
-        if (hours === 0 && mins === 0) {
-          pickupDateTime = month + '/' + day;
+    // Try to reformat "5/5/2026 6:00:00" → "5/5 6:00 AM" without any Date() conversion
+    const match = pdRaw.match(/^(\d+\/\d+)(?:\/\d+)?(?:\s+(\d+):(\d+)(?::\d+)?)?/);
+    if (match) {
+      const datePart = match[1]; // "5/5"
+      const hStr = match[2];
+      const mStr = match[3];
+      if (hStr !== undefined) {
+        const h = parseInt(hStr);
+        const m = parseInt(mStr);
+        if (h === 0 && m === 0) {
+          pickupDateTime = datePart;
         } else {
-          const ampm = hours >= 12 ? 'PM' : 'AM';
-          const h12 = hours % 12 || 12;
-          const mStr = mins > 0 ? ':' + String(mins).padStart(2,'0') : '';
-          pickupDateTime = month + '/' + day + ' ' + h12 + mStr + ' ' + ampm;
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const h12 = h % 12 || 12;
+          const mPad = m > 0 ? ':' + String(m).padStart(2,'0') : '';
+          pickupDateTime = datePart + ' ' + h12 + mPad + ' ' + ampm;
         }
       } else {
-        pickupDateTime = pdRaw;
+        pickupDateTime = datePart;
       }
-    } catch(e) { pickupDateTime = pdRaw; }
+    } else {
+      pickupDateTime = pdRaw;
+    }
   }
 
   return {
@@ -918,11 +1004,11 @@ function renderHeader() {
   `;
 }
 
-// ── RENDER DETAIL ──
-function renderDetail(key) {
+// ── BUILD DETAIL HTML (shared by desktop + mobile modal) ──
+function buildDetailHTML(key, forModal) {
   const groups = getStopsForDriver(activeDriver);
   const g = groups.find(x => gKey(x) === key);
-  if (!g) return;
+  if (!g) return '';
 
   const d = isDone(g);
   const allGroups = getStopsForDriver(activeDriver);
@@ -933,7 +1019,7 @@ function renderDetail(key) {
   const totalPL = g.orders.reduce((s,o)=>s+(o.pl||0),0);
   const warnFlag = g.orders.some(o => (o.appt||'').toUpperCase().includes('CANCEL'));
 
-  const mapUrl = `https://maps.google.com/?q=${encodeURIComponent(g.address)}`;
+  const mapUrl = 'https://maps.google.com/?q=' + encodeURIComponent(g.address);
   const phoneRaw = g.phone || '';
   const phone = phoneRaw && !/^[a-z]/i.test(phoneRaw) ? phoneRaw.replace(/\D/g,'') : null;
 
@@ -942,70 +1028,101 @@ function renderDetail(key) {
   const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
 
   let alerts = '';
-  if (warnFlag) alerts += `<div class="alert-banner alert-warn">⚠ ${g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'))?.appt} — Verify before pickup</div>`;
+  if (warnFlag) {
+    const wo = g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'));
+    alerts = '<div class="alert-banner alert-warn">&#9888; ' + (wo ? wo.appt : '') + ' — Verify before pickup</div>';
+  }
 
-  let apptBlock = '';
-  if (apptInfos.length) apptBlock = `<div class="appt-block">📋 ${apptInfos.join(' · ')}</div>`;
+  const apptBlock = apptInfos.length ? '<div class="appt-block">&#128203; ' + apptInfos.join(' · ') + '</div>' : '';
+  const safeKey = key.replace(/'/g, "\'");
+  const progressBar = forModal ? '' : '<div class="prog-bar"><div class="prog-fill" style="width:' + pct + '%"></div></div>';
 
   const ordersHtml = g.orders.map(o => {
     const tempCls = getTempClass(o);
-    let chips = tempCls ? chip(tempCls, tempCls) : '';
-    return `<div class="order-card">
-      <div>
-        <div class="order-customer">${o.customer}</div>
-        ${o.consignee && o.consignee !== o.customer ? `<div class="order-consignee">→ ${o.consignee}</div>` : ''}
-        <div class="order-dest">▸ ${o.delCity}, ${o.delSt}</div>
-        <div class="order-meta">
-          ${o.po ? `<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">${o.po}</div></div>` : ''}
-          ${o.bol ? `<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">${o.bol}</div></div>` : ''}
-          ${o.shipRef ? `<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">${o.shipRef}</div></div>` : ''}
-          ${o.pickupDateTime ? `<div class="meta-field"><div class="meta-lbl">Pickup Date &amp; Time</div><div class="meta-val">${o.pickupDateTime}</div></div>` : ''}
-        </div>
-        ${chips ? `<div class="order-chips">${chips}</div>` : ''}
-      </div>
-      <div class="order-right">
-        <div class="order-wt">${fmtW(o.weight)}</div>
-        <div class="order-pl">${fmtPL(o.pl)}</div>
-      </div>
-    </div>`;
+    const chips = tempCls ? chip(tempCls, tempCls) : '';
+    return '<div class="order-card">' +
+      '<div>' +
+        '<div class="order-customer">' + o.customer + '</div>' +
+        (o.consignee && o.consignee !== o.customer ? '<div class="order-consignee">→ ' + o.consignee + '</div>' : '') +
+        '<div class="order-dest">▸ ' + o.delCity + ', ' + o.delSt + '</div>' +
+        '<div class="order-meta">' +
+          (o.po ? '<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">' + o.po + '</div></div>' : '') +
+          (o.bol ? '<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">' + o.bol + '</div></div>' : '') +
+          (o.shipRef ? '<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">' + o.shipRef + '</div></div>' : '') +
+          (o.pickupDateTime ? '<div class="meta-field"><div class="meta-lbl">Pickup Date &amp; Time</div><div class="meta-val">' + o.pickupDateTime + '</div></div>' : '') +
+        '</div>' +
+        (chips ? '<div class="order-chips">' + chips + '</div>' : '') +
+      '</div>' +
+      '<div class="order-right">' +
+        '<div class="order-wt">' + fmtW(o.weight) + '</div>' +
+        '<div class="order-pl">' + fmtPL(o.pl) + '</div>' +
+      '</div>' +
+    '</div>';
   }).join('');
 
-  document.getElementById('mainPanel').innerHTML = `
-    <div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div>
-    <div class="detail-hdr">
-      <div>
-        <div class="detail-stopnum">${stopLabel(g.orders)}</div>
-        <div class="detail-title">${g.shipper}</div>
-        <div class="detail-addr">${g.address}</div>
-      </div>
-      <div class="detail-actions">
-        ${g.address ? `<a href="${mapUrl}" target="_blank" class="btn btn-nav">📍 Navigate</a>` : ''}
-        ${phone ? `<a href="tel:${phone}" class="btn btn-call">📞 Call</a>` : ''}
-        <button class="btn ${d?'btn-undone':'btn-done'}" onclick="toggleDone('${key.replace(/'/g, "\\'")}')">
-          ${d ? '↩ Undo' : '✓ Done'}
-        </button>
-      </div>
-    </div>
-    ${alerts}
-    ${apptBlock}
-    <div class="summary-bar">
-      <div class="sum-item"><div class="sum-lbl">Orders</div><div class="sum-val">${g.orders.length}</div></div>
-      <div class="sum-item"><div class="sum-lbl">Total Weight</div><div class="sum-val">${fmtW(totalW)}</div></div>
-      <div class="sum-item"><div class="sum-lbl">Total Pallets</div><div class="sum-val">${totalPL > 0 ? totalPL + ' PLT' : '—'}</div></div>
-      ${pickupDates ? `<div class="sum-item"><div class="sum-lbl">Pickup Date &amp; Time</div><div class="sum-val">${pickupDates}</div></div>` : ''}
-    </div>
-    ${phone ? `<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">${g.phone}</div></div><a href="tel:${phone}" class="btn btn-call">Call</a></div>` : ''}
-    <div class="section-lbl">Orders at this location (${g.orders.length})</div>
-    <div class="orders-list">${ordersHtml}</div>
-  `;
+  return progressBar +
+    '<div class="detail-hdr">' +
+      '<div>' +
+        '<div class="detail-stopnum">' + stopLabel(g.orders) + '</div>' +
+        '<div class="detail-title">' + g.shipper + '</div>' +
+        '<div class="detail-addr">' + g.address + '</div>' +
+      '</div>' +
+      '<div class="detail-actions">' +
+        (g.address ? '<a href="' + mapUrl + '" target="_blank" class="btn btn-nav">&#128205; Navigate</a>' : '') +
+        (phone ? '<a href="tel:' + phone + '" class="btn btn-call">&#128222; Call</a>' : '') +
+        '<button class="btn ' + (d ? 'btn-undone' : 'btn-done') + '" onclick="toggleDone('' + safeKey + '')">' +
+          (d ? '↩ Undo' : '✓ Done') +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    alerts +
+    apptBlock +
+    '<div class="summary-bar">' +
+      '<div class="sum-item"><div class="sum-lbl">Orders</div><div class="sum-val">' + g.orders.length + '</div></div>' +
+      '<div class="sum-item"><div class="sum-lbl">Total Weight</div><div class="sum-val">' + fmtW(totalW) + '</div></div>' +
+      '<div class="sum-item"><div class="sum-lbl">Total Pallets</div><div class="sum-val">' + (totalPL > 0 ? totalPL + ' PLT' : '—') + '</div></div>' +
+      (pickupDates ? '<div class="sum-item"><div class="sum-lbl">Pickup Date &amp; Time</div><div class="sum-val">' + pickupDates + '</div></div>' : '') +
+    '</div>' +
+    (phone ? '<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">' + g.phone + '</div></div><a href="tel:' + phone + '" class="btn btn-call">Call</a></div>' : '') +
+    '<div class="section-lbl">Orders at this location (' + g.orders.length + ')</div>' +
+    '<div class="orders-list">' + ordersHtml + '</div>';
+}
+
+// ── RENDER DETAIL (desktop panel) ──
+function renderDetail(key) {
+  document.getElementById('mainPanel').innerHTML = buildDetailHTML(key, false);
 }
 
 // ── INTERACTIONS ──
+function isMobile() { return window.innerWidth <= 680; }
+
 function selectStop(key) {
   activeKey = key;
   renderSidebar();
-  renderDetail(key);
-  document.getElementById('mainPanel').scrollTop = 0;
+  if (isMobile()) {
+    openModal(key);
+  } else {
+    renderDetail(key);
+    document.getElementById('mainPanel').scrollTop = 0;
+  }
+}
+
+function openModal(key) {
+  const overlay = document.getElementById('modalOverlay');
+  const inner = document.getElementById('modalInner');
+  inner.innerHTML = buildDetailHTML(key);
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  document.getElementById('modalSheet').scrollTop = 0;
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
 }
 
 function setDriver(id) {
@@ -1034,7 +1151,17 @@ function toggleDone(key) {
 
   renderHeader();
   renderSidebar();
-  if (activeKey === key) renderDetail(key);
+  if (activeKey === key) {
+    if (isMobile()) {
+      // Refresh modal content in place
+      const inner = document.getElementById('modalInner');
+      if (inner && document.getElementById('modalOverlay').classList.contains('open')) {
+        inner.innerHTML = buildDetailHTML(key, true);
+      }
+    } else {
+      renderDetail(key);
+    }
+  }
 }
 
 // ── UI STATES ──
