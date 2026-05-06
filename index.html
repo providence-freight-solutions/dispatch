@@ -408,6 +408,11 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    min-height: 44px;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .btn-nav { background: var(--dark3); color: var(--blue); border: 1px solid rgba(76,168,212,0.3); }
@@ -776,7 +781,7 @@ function startPolling() {
           const inner = document.getElementById('modalInner');
           if (overlay.classList.contains('open') && inner) {
             inner.innerHTML = buildDetailHTML(activeKey, true);
-            wireDoneButton(inner);
+
           }
         } else {
           renderDetail(activeKey);
@@ -1207,13 +1212,14 @@ function buildDetailHTML(key, forModal) {
     + '</div>';
   }).join('');
 
-  // Use data-key attribute on done button — wired up after render via wireDoneButton()
-  const doneBtn = '<button class="btn ' + (d ? 'btn-undone' : 'btn-done') + '" id="doneBtn" data-key="' + encodeURIComponent(key) + '">'
+  // Use global pvdToggleDone() — most reliable across iOS/Android WebKit
+  const encodedKey = encodeURIComponent(key);
+  const doneBtn = '<button class="btn ' + (d ? 'btn-undone' : 'btn-done') + '" onclick="pvdToggleDone(\'' + encodedKey + '\')" style="-webkit-tap-highlight-color:transparent;touch-action:manipulation;min-height:44px;min-width:80px">'
     + (d ? '&#8617; Undo' : '&#10003; Done')
     + '</button>';
 
-  const navBtn  = g.address ? '<a href="' + mapUrl + '" target="_blank" class="btn btn-nav">&#128205; Navigate</a>' : '';
-  const callBtn = phone ? '<a href="tel:' + phone + '" class="btn btn-call">&#128222; Call</a>' : '';
+  const navBtn  = g.address ? '<a href="' + mapUrl + '" target="_blank" class="btn btn-nav" style="-webkit-tap-highlight-color:transparent;touch-action:manipulation;min-height:44px">&#128205; Navigate</a>' : '';
+  const callBtn = phone ? '<a href="tel:' + phone + '" class="btn btn-call" style="-webkit-tap-highlight-color:transparent;touch-action:manipulation;min-height:44px">&#128222; Call</a>' : '';
   const phoneBlock = phone
     ? '<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">' + g.phone + '</div></div><a href="tel:' + phone + '" class="btn btn-call">Call</a></div>'
     : '';
@@ -1240,23 +1246,13 @@ function buildDetailHTML(key, forModal) {
     + '<div class="orders-list">' + ordersHtml + '</div>';
 }
 
-// Wire the Done button after innerHTML is set (avoids inline onclick quoting issues)
-function wireDoneButton(container) {
-  const btn = container ? container.querySelector('#doneBtn') : document.getElementById('doneBtn');
-  if (btn) {
-    btn.addEventListener('click', function() {
-      const key = decodeURIComponent(btn.dataset.key);
-      toggleDone(key);
-    });
-  }
-}
+// Done button uses window.pvdToggleDone inline onclick
 
 
 // ── RENDER DETAIL (desktop panel) ──
 function renderDetail(key) {
   const panel = document.getElementById('mainPanel');
   panel.innerHTML = buildDetailHTML(key, false);
-  wireDoneButton(panel);
 }
 
 // ── INTERACTIONS ──
@@ -1299,6 +1295,11 @@ function setDriver(id) {
   showEmpty();
 }
 
+// Global wrapper for inline onclick — needed for iOS/Android WebKit reliability
+window.pvdToggleDone = function(encodedKey) {
+  toggleDone(decodeURIComponent(encodedKey));
+};
+
 function toggleDone(key) {
   const groups = getStopsForDriver(activeDriver);
   const g = groups.find(x => gKey(x) === key);
@@ -1323,7 +1324,6 @@ function toggleDone(key) {
       const inner = document.getElementById('modalInner');
       if (inner && document.getElementById('modalOverlay').classList.contains('open')) {
         inner.innerHTML = buildDetailHTML(key, true);
-        wireDoneButton(inner);
       }
     } else {
       renderDetail(key);
