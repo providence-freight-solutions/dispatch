@@ -789,6 +789,7 @@ function startPolling() {
 }
 
 function getGroupFromRAW(rawData, key) {
+  // key format: "tripIndex|address" — just compare orders by address+trip
   const d = DRIVERS.find(x => x.id === activeDriver);
   if (!d) return null;
   const rows = rawData.filter(r => !r.tripBreak && r.stop >= d.range[0] && r.stop <= d.range[1]);
@@ -798,7 +799,9 @@ function getGroupFromRAW(rawData, key) {
     if (!byAddr[k]) byAddr[k] = {orders:[]};
     byAddr[k].orders.push(r);
   });
-  return byAddr[key] || null;
+  // Strip tripIndex prefix from key for lookup
+  const addrKey = key.includes('|') ? key.split('|').slice(1).join('|') : key;
+  return byAddr[addrKey] || null;
 }
 
 function showUpdateToast() {
@@ -1029,7 +1032,7 @@ function getTripsForDriver(id) {
   });
 }
 
-function gKey(g) { return g.address.trim().toLowerCase().replace(/\s+/g,' '); }
+function gKey(g) { return g.tripIndex + '|' + g.address.trim().toLowerCase().replace(/\s+/g,' '); }
 
 function isDone(g) {
   return g.orders.some(o => !!done[o.stopVal]);
@@ -1061,8 +1064,11 @@ function chip(cls, label) { return `<span class="chip chip-${cls}">${label}</spa
 
 // ── RENDER SIDEBAR ──
 function renderSidebar() {
-  const groups = getStopsForDriver(activeDriver);
-  const html = groups.map(g => {
+  const trips = getTripsForDriver(activeDriver);
+  const allGroups = trips.flat();
+  const multiTrip = trips.length > 1;
+
+  function renderGroup(g) {
     const key = gKey(g);
     const active = activeKey === key;
     const d = isDone(g);
@@ -1072,29 +1078,52 @@ function renderSidebar() {
     const temps = [...new Set(g.orders.map(getTempClass).filter(Boolean))];
     const apptFlag = hasApptInfo(g.orders);
     const warnFlag = g.orders.some(o => (o.appt||'').toUpperCase().includes('CANCEL'));
-
     let chips = '';
     temps.forEach(t => { chips += chip(t, t); });
     if (apptFlag) chips += chip('appt', 'APPT');
-    if (warnFlag) chips += chip('warn', '⚠ WARNING');
-
+    if (warnFlag) chips += chip('warn', '&#9888; WARNING');
     const addrShort = g.address.split(',').slice(-1)[0].trim() || g.address;
+    const el = document.createElement('div');
+    el.className = 'stop-item' + (active ? ' active' : '') + (d ? ' done' : '');
+    el.dataset.key = key;
+    el.addEventListener('click', function() { selectStop(this.dataset.key); });
+    el.innerHTML = '<div class="stop-item-top">'
+      + '<div class="stop-num">' + stopLabel(g.orders) + '</div>'
+      + '<span class="order-count ' + (multi?'multi':'single') + '">' + g.orders.length + '&times;</span>'
+      + '</div>'
+      + '<div class="stop-shipper">' + g.shipper + '</div>'
+      + '<div class="stop-addr">' + addrShort + '</div>'
+      + '<div class="stop-wt">' + fmtW(totalW) + ' &nbsp;&middot;&nbsp; ' + fmtPL(totalPL) + '</div>'
+      + (chips ? '<div class="stop-chips">' + chips + '</div>' : '');
+    return el;
+  }
+  const container = document.getElementById('stopList');
+  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
 
-    return `<div class="stop-item${active?' active':''}${d?' done':''}" onclick="selectStop('${key.replace(/'/g, "\\'")}')">
-      <div class="stop-item-top">
-        <div class="stop-num">${stopLabel(g.orders)}</div>
-        <span class="order-count ${multi?'multi':'single'}">${g.orders.length}×</span>
-      </div>
-      <div class="stop-shipper">${g.shipper}</div>
-      <div class="stop-addr">${addrShort}</div>
-      <div class="stop-wt">${fmtW(totalW)} &nbsp;·&nbsp; ${fmtPL(totalPL)}</div>
-      ${chips ? `<div class="stop-chips">${chips}</div>` : ''}
-    </div>`;
-  }).join('');
+  if (!allGroups.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:20px;color:var(--text3);font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-align:center';
+    empty.textContent = 'NO STOPS ASSIGNED';
+    frag.appendChild(empty);
+  } else if (!multiTrip) {
+    allGroups.forEach(g => frag.appendChild(renderGroup(g)));
+  } else {
+    trips.forEach(function(tripGroups, idx) {
+      const doneCount = tripGroups.filter(g=>isDone(g)).length;
+      const tripW = tripGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.weight||0); },0); }, 0);
+      const hdr = document.createElement('div');
+      hdr.className = 'trip-header';
+      hdr.innerHTML = '<span class="trip-label">&#9654; TRIP ' + (idx+1) + '</span>'
+        + '<span class="trip-meta">' + doneCount + '/' + tripGroups.length + ' stops &nbsp;&middot;&nbsp; ' + tripW.toLocaleString() + ' lbs</span>';
+      frag.appendChild(hdr);
+      tripGroups.forEach(g => frag.appendChild(renderGroup(g)));
+    });
+  }
 
-  document.getElementById('stopList').innerHTML = html || `<div style="padding:20px;color:var(--text3);font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-align:center">NO STOPS ASSIGNED</div>`;
-  const remaining = groups.filter(g=>!isDone(g)).length;
-  document.getElementById('stopCount').textContent = `${remaining}/${groups.length}`;
+  container.appendChild(frag);
+  const remaining = allGroups.filter(g=>!isDone(g)).length;
+  document.getElementById('stopCount').textContent = remaining + '/' + allGroups.length;
 }
 
 // ── RENDER HEADER ──
@@ -1124,7 +1153,7 @@ function renderHeader() {
 
 // ── BUILD DETAIL HTML (shared by desktop + mobile modal) ──
 function buildDetailHTML(key, forModal) {
-  const groups = getStopsForDriver(activeDriver);
+  const groups = getTripsForDriver(activeDriver).flat();
   const g = groups.find(x => gKey(x) === key);
   if (!g) return '';
 
