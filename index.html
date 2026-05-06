@@ -1256,6 +1256,15 @@ function renderDetail(key) {
 }
 
 // ── INTERACTIONS ──
+function setDriver(id) {
+  activeDriver = id;
+  activeKey = null;
+  history.replaceState(null, '', '#' + id);
+  renderHeader();
+  renderSidebar();
+  showEmpty();
+}
+
 function isMobile() { return window.innerWidth <= 680; }
 
 function selectStop(key) {
@@ -1285,14 +1294,6 @@ function closeModal() {
 
 function handleOverlayClick(e) {
   if (e.target === document.getElementById('modalOverlay')) closeModal();
-}
-
-function setDriver(id) {
-  activeDriver = id;
-  activeKey = null;
-  renderHeader();
-  renderSidebar();
-  showEmpty();
 }
 
 // Global wrapper for inline onclick — needed for iOS/Android WebKit reliability
@@ -1367,6 +1368,13 @@ async function loadData() {
     if (!parsed.length) throw new Error('No stop data found. Keys: ' + Object.keys(json[0]).join(', '));
     RAW = parsed;
     syncDone(json);
+
+    // Apply URL hash to jump to correct driver (e.g. #chn, #johnny)
+    const hash = window.location.hash.replace('#','').toLowerCase().trim();
+    if (hash && DRIVERS.find(d => d.id === hash)) {
+      activeDriver = hash;
+    }
+
     renderHeader();
     renderSidebar();
     showEmpty();
