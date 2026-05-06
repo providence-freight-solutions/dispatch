@@ -626,18 +626,122 @@ const DRIVERS = [
 let RAW = [];
 let activeDriver = "johnny";
 let activeKey = null;
-let done = JSON.parse(localStorage.getItem("pvd_done") || "{}");
+let done = {}; // { "STOP 01": true, ... } — synced across all users via Google Sheet
 
+// ── POLLING (every 30s) ──
+let pollInterval = null;
+let lastDataHash = '';
+
+function hashData(json) {
+  // Quick fingerprint of the data to detect any change
+  return JSON.stringify(json.map(r => ({
+    s: r['STOP'], w: r['WEIGHT'], p: r['PICKED'],
+    a: r['APPOINTMENT INFO'], ph: r['PHONE NUMBER']
+  })));
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const resp = await fetch(APPS_SCRIPT_URL + '?t=' + Date.now()); // cache-bust
+      if (!resp.ok) return;
+      const json = await resp.json();
+      if (!Array.isArray(json) || !json.length) return;
+
+      const newHash = hashData(json);
+      if (newHash === lastDataHash) return; // nothing changed
+      lastDataHash = newHash;
+
+      const parsed = json.map(rowToStop).filter(Boolean);
+      if (!parsed.length) return;
+
+      const prevRAW = RAW;
+      RAW = parsed;
+      syncDone(json);
+      renderHeader();
+      renderSidebar();
+
+      if (activeKey) {
+        // Check if the currently viewed stop changed
+        const prevGroup = getGroupFromRAW(prevRAW, activeKey);
+        const newGroup = getStopsForDriver(activeDriver).find(x => gKey(x) === activeKey);
+        const changed = prevGroup && newGroup &&
+          JSON.stringify(prevGroup.orders) !== JSON.stringify(newGroup.orders);
+
+        renderDetail(activeKey);
+
+        if (changed) showUpdateToast();
+      }
+    } catch(e) { /* silent poll failure */ }
+  }, 30000);
+}
+
+function getGroupFromRAW(rawData, key) {
+  // Rebuild groups from a given RAW snapshot for comparison
+  const d = DRIVERS.find(x => x.id === activeDriver);
+  if (!d) return null;
+  const rows = rawData.filter(r => r.stop >= d.range[0] && r.stop <= d.range[1]);
+  const byAddr = {};
+  rows.forEach(r => {
+    const k = r.address.trim().toLowerCase().replace(/\s+/g,' ');
+    if (!byAddr[k]) byAddr[k] = {orders:[]};
+    byAddr[k].orders.push(r);
+  });
+  return byAddr[key] || null;
+}
+
+function showUpdateToast() {
+  // Remove any existing toast
+  const existing = document.getElementById('update-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'update-toast';
+  toast.innerHTML = '↻ Stop details updated';
+  toast.style.cssText = `
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--gold); color: #000;
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 10px 20px; border-radius: 4px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    z-index: 999; opacity: 0;
+    transition: opacity 0.3s ease;
+  `;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => { toast.style.opacity = '1'; });
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+function syncDone(json) {
+  done = {};
+  json.forEach(r => {
+    const stop = (r['STOP'] || '').trim();
+    const picked = (r['PICKED'] || '').trim().toUpperCase();
+    if (stop && picked === 'DONE') done[stop] = true;
+  });
+}
+
+// ── WRITE DONE STATUS BACK TO SHEET ──
+async function setDoneOnSheet(stopVal, isDoneVal) {
+  try {
+    const url = APPS_SCRIPT_URL + '?action=setDone&stop=' + encodeURIComponent(stopVal) + '&done=' + isDoneVal;
+    await fetch(url);
+  } catch(e) {
+    console.error('setDone error:', e);
+  }
+}
 
 // ── PARSE ROW → stop object ──
-// Apps Script returns objects with sheet header strings as keys.
-// Headers: STOP | ADDRESS | PHONE NUMBER | CUSTOMER | CUSTOMER.1 | SHIPPER |
-//          ORIGIN STATE | SCHEDULE PICKUP | PICKUP DAY & TIME | CONSIGNEE NAME |
-//          DEL CITY | DEL ST | PO # | PO#  | BOL # | SHIP REF | WEIGHT | PL |
-//          TEMP | ID | PICKED | READY TIME | APPOINTMENT INFO | DELIVERED |
-//          FINAL NOTES | Final Mile#
+// Exact headers from PICKUPS sheet:
+// STOP | ADDRESS | PHONE NUMBER | CUSTOMER | SHIPPER | PICKUP DATE & TIME |
+// CONSIGNEE NAME | DELIVERTY CITY | DELIVERY ST | PO#  | BOL # | SHIP REF |
+// WEIGHT | PL | APPOINTMENT INFO | PICKED
 function rowToStop(r) {
-  // Normalize keys for flexible lookup
   const get = (...keys) => {
     for (const k of keys) {
       if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
@@ -660,26 +764,45 @@ function rowToStop(r) {
   const weight = parseFloat(wRaw) || 0;
   const pl = parseFloat(get('PL')) || 0;
 
-  // Pickup date from PICKUP DAY & TIME or SCHEDULE PICKUP
-  let pickupDate = '';
-  const pdRaw = get('PICKUP DAY & TIME', 'SCHEDULE PICKUP');
-  const pdMatch = pdRaw.match(/(\d+\/\d+)/);
-  if (pdMatch) pickupDate = pdMatch[1];
+  // Format PICKUP DATE & TIME nicely: "5/6 6:00 AM" or just "5/6" if midnight
+  let pickupDateTime = '';
+  const pdRaw = get('PICKUP DATE & TIME');
+  if (pdRaw) {
+    try {
+      const d = new Date(pdRaw);
+      if (!isNaN(d)) {
+        const month = d.getMonth() + 1;
+        const day = d.getDate();
+        const hours = d.getHours();
+        const mins = d.getMinutes();
+        if (hours === 0 && mins === 0) {
+          pickupDateTime = month + '/' + day;
+        } else {
+          const ampm = hours >= 12 ? 'PM' : 'AM';
+          const h12 = hours % 12 || 12;
+          const mStr = mins > 0 ? ':' + String(mins).padStart(2,'0') : '';
+          pickupDateTime = month + '/' + day + ' ' + h12 + mStr + ' ' + ampm;
+        }
+      } else {
+        pickupDateTime = pdRaw;
+      }
+    } catch(e) { pickupDateTime = pdRaw; }
+  }
 
   return {
     stop: stopNum,
+    stopVal: stopVal,  // original e.g. "STOP 01"
     shipper: shipper,
     address: get('ADDRESS'),
     phone: get('PHONE NUMBER'),
-    customer: get('CUSTOMER.1', 'CUSTOMER'),
+    customer: get('CUSTOMER'),
     consignee: get('CONSIGNEE NAME'),
-    delCity: get('DEL CITY'),
-    delSt: get('DEL ST'),
+    delCity: get('DELIVERTY CITY'),
+    delSt: get('DELIVERY ST'),
     weight: weight,
     pl: pl,
-    pickupDate: pickupDate,
-    readyTime: get('READY TIME'),
-    po: get('PO #', 'PO# '),
+    pickupDateTime: pickupDateTime,
+    po: get('PO# ', 'PO #', 'PO#'),
     bol: get('BOL #'),
     shipRef: get('SHIP REF'),
     appt: get('APPOINTMENT INFO'),
@@ -703,8 +826,10 @@ function getStopsForDriver(id) {
 }
 
 function gKey(g) { return g.address.trim().toLowerCase().replace(/\s+/g,' '); }
-function dKey(g) { return activeDriver + ':' + gKey(g); }
-function isDone(g) { return !!done[dKey(g)]; }
+
+function isDone(g) {
+  return g.orders.some(o => !!done[o.stopVal]);
+}
 
 function stopLabel(orders) {
   const nums = [...new Set(orders.map(o=>o.stop))].sort((a,b)=>a-b);
@@ -751,7 +876,16 @@ function renderSidebar() {
 
     const addrShort = g.address.split(',').slice(-1)[0].trim() || g.address;
 
-    return `<div class="stop-item${active?' active':''}${d?' done':''}" onclick="selectStop('${key.replace(/'/g, "\\'")}')">      <div class="stop-item-top">        <div class="stop-num">${stopLabel(g.orders)}</div>        <span class="order-count ${multi?'multi':'single'}">${g.orders.length}×</span>      </div>      <div class="stop-shipper">${g.shipper}</div>      <div class="stop-addr">${addrShort}</div>      <div class="stop-wt">${fmtW(totalW)} &nbsp;·&nbsp; ${fmtPL(totalPL)}</div>      ${chips ? `<div class="stop-chips">${chips}</div>` : ''}    </div>`;
+    return `<div class="stop-item${active?' active':''}${d?' done':''}" onclick="selectStop('${key.replace(/'/g, "\\'")}')">
+      <div class="stop-item-top">
+        <div class="stop-num">${stopLabel(g.orders)}</div>
+        <span class="order-count ${multi?'multi':'single'}">${g.orders.length}×</span>
+      </div>
+      <div class="stop-shipper">${g.shipper}</div>
+      <div class="stop-addr">${addrShort}</div>
+      <div class="stop-wt">${fmtW(totalW)} &nbsp;·&nbsp; ${fmtPL(totalPL)}</div>
+      ${chips ? `<div class="stop-chips">${chips}</div>` : ''}
+    </div>`;
   }).join('');
 
   document.getElementById('stopList').innerHTML = html || `<div style="padding:20px;color:var(--text3);font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-align:center">NO STOPS ASSIGNED</div>`;
@@ -764,7 +898,7 @@ function renderHeader() {
   const tabsHtml = DRIVERS.map(d => {
     const groups = getStopsForDriver(d.id);
     const total = groups.length;
-    const doneCount = groups.filter(g=>done[d.id+':'+gKey(g)]).length;
+    const doneCount = groups.filter(g=>isDone(g)).length;
     const pct = total ? (doneCount/total*100) : 0;
     return `<button class="driver-tab${activeDriver===d.id?' active':''}" onclick="setDriver('${d.id}')">
       ${d.name}${total?'':' —'}
@@ -803,8 +937,7 @@ function renderDetail(key) {
   const phoneRaw = g.phone || '';
   const phone = phoneRaw && !/^[a-z]/i.test(phoneRaw) ? phoneRaw.replace(/\D/g,'') : null;
 
-  const pickupDates = [...new Set(g.orders.map(o=>o.pickupDate).filter(Boolean))].join(', ');
-  const readyTimes = [...new Set(g.orders.map(o=>o.readyTime).filter(Boolean))].join(', ');
+  const pickupDates = [...new Set(g.orders.map(o=>o.pickupDateTime).filter(Boolean))].join(', ');
   const skip = ['CONF RDY','NEED','OK','CONF','REQ',''];
   const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
 
@@ -817,8 +950,24 @@ function renderDetail(key) {
   const ordersHtml = g.orders.map(o => {
     const tempCls = getTempClass(o);
     let chips = tempCls ? chip(tempCls, tempCls) : '';
-
-    return `<div class="order-card">      <div>        <div class="order-customer">${o.customer}</div>        ${o.consignee && o.consignee !== o.customer ? `<div class="order-consignee">→ ${o.consignee}</div>` : ''}        <div class="order-dest">▸ ${o.delCity}, ${o.delSt}</div>        <div class="order-meta">          ${o.po ? `<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">${o.po}</div></div>` : ''}          ${o.bol ? `<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">${o.bol}</div></div>` : ''}          ${o.shipRef ? `<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">${o.shipRef}</div></div>` : ''}          ${o.pickupDate ? `<div class="meta-field"><div class="meta-lbl">Pickup</div><div class="meta-val">${o.pickupDate}</div></div>` : ''}          ${o.readyTime ? `<div class="meta-field"><div class="meta-lbl">Ready</div><div class="meta-val">${o.readyTime}</div></div>` : ''}        </div>        ${chips ? `<div class="order-chips">${chips}</div>` : ''}      </div>      <div class="order-right">        <div class="order-wt">${fmtW(o.weight)}</div>        <div class="order-pl">${fmtPL(o.pl)}</div>      </div>    </div>`;
+    return `<div class="order-card">
+      <div>
+        <div class="order-customer">${o.customer}</div>
+        ${o.consignee && o.consignee !== o.customer ? `<div class="order-consignee">→ ${o.consignee}</div>` : ''}
+        <div class="order-dest">▸ ${o.delCity}, ${o.delSt}</div>
+        <div class="order-meta">
+          ${o.po ? `<div class="meta-field"><div class="meta-lbl">PO #</div><div class="meta-val">${o.po}</div></div>` : ''}
+          ${o.bol ? `<div class="meta-field"><div class="meta-lbl">BOL</div><div class="meta-val">${o.bol}</div></div>` : ''}
+          ${o.shipRef ? `<div class="meta-field"><div class="meta-lbl">Ref #</div><div class="meta-val">${o.shipRef}</div></div>` : ''}
+          ${o.pickupDateTime ? `<div class="meta-field"><div class="meta-lbl">Pickup Date &amp; Time</div><div class="meta-val">${o.pickupDateTime}</div></div>` : ''}
+        </div>
+        ${chips ? `<div class="order-chips">${chips}</div>` : ''}
+      </div>
+      <div class="order-right">
+        <div class="order-wt">${fmtW(o.weight)}</div>
+        <div class="order-pl">${fmtPL(o.pl)}</div>
+      </div>
+    </div>`;
   }).join('');
 
   document.getElementById('mainPanel').innerHTML = `
@@ -832,7 +981,9 @@ function renderDetail(key) {
       <div class="detail-actions">
         ${g.address ? `<a href="${mapUrl}" target="_blank" class="btn btn-nav">📍 Navigate</a>` : ''}
         ${phone ? `<a href="tel:${phone}" class="btn btn-call">📞 Call</a>` : ''}
-        <button class="btn ${d?'btn-undone':'btn-done'}" onclick="toggleDone('${key.replace(/'/g, "\\'")}')">${d ? '↩ Undo' : '✓ Done'}</button>
+        <button class="btn ${d?'btn-undone':'btn-done'}" onclick="toggleDone('${key.replace(/'/g, "\\'")}')">
+          ${d ? '↩ Undo' : '✓ Done'}
+        </button>
       </div>
     </div>
     ${alerts}
@@ -841,8 +992,7 @@ function renderDetail(key) {
       <div class="sum-item"><div class="sum-lbl">Orders</div><div class="sum-val">${g.orders.length}</div></div>
       <div class="sum-item"><div class="sum-lbl">Total Weight</div><div class="sum-val">${fmtW(totalW)}</div></div>
       <div class="sum-item"><div class="sum-lbl">Total Pallets</div><div class="sum-val">${totalPL > 0 ? totalPL + ' PLT' : '—'}</div></div>
-      ${pickupDates ? `<div class="sum-item"><div class="sum-lbl">Pickup Date</div><div class="sum-val">${pickupDates}</div></div>` : ''}
-      ${readyTimes ? `<div class="sum-item"><div class="sum-lbl">Ready</div><div class="sum-val">${readyTimes}</div></div>` : ''}
+      ${pickupDates ? `<div class="sum-item"><div class="sum-lbl">Pickup Date &amp; Time</div><div class="sum-val">${pickupDates}</div></div>` : ''}
     </div>
     ${phone ? `<div class="phone-block"><div><div class="phone-lbl">Shipper Phone</div><div class="phone-num">${g.phone}</div></div><a href="tel:${phone}" class="btn btn-call">Call</a></div>` : ''}
     <div class="section-lbl">Orders at this location (${g.orders.length})</div>
@@ -850,6 +1000,7 @@ function renderDetail(key) {
   `;
 }
 
+// ── INTERACTIONS ──
 function selectStop(key) {
   activeKey = key;
   renderSidebar();
@@ -866,14 +1017,27 @@ function setDriver(id) {
 }
 
 function toggleDone(key) {
-  const dk = activeDriver + ':' + key;
-  if (done[dk]) delete done[dk]; else done[dk] = true;
-  localStorage.setItem('pvd_done', JSON.stringify(done));
+  const groups = getStopsForDriver(activeDriver);
+  const g = groups.find(x => gKey(x) === key);
+  if (!g) return;
+
+  const nowDone = isDone(g);
+  const setTo = !nowDone;
+
+  // Optimistic update locally
+  g.orders.forEach(o => {
+    if (setTo) done[o.stopVal] = true;
+    else delete done[o.stopVal];
+    // Write each stop to the sheet
+    setDoneOnSheet(o.stopVal, setTo);
+  });
+
   renderHeader();
   renderSidebar();
   if (activeKey === key) renderDetail(key);
 }
 
+// ── UI STATES ──
 function showEmpty() {
   document.getElementById('mainPanel').innerHTML = `<div class="empty-state"><img class="empty-logo" src="${document.getElementById('logoImg').src}" alt=""><div class="empty-txt">Select a stop</div></div>`;
 }
@@ -897,26 +1061,30 @@ function showError(msg) {
     </div>`;
 }
 
-// ── LOAD DATA FROM APPS SCRIPT ──
+// ── LOAD DATA ──
 async function loadData() {
   showLoading();
   try {
     const resp = await fetch(APPS_SCRIPT_URL);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
-    if (!Array.isArray(json)) throw new Error('Unexpected response format');
+    if (!Array.isArray(json) || !json.length) throw new Error('Sheet returned no data');
     const parsed = json.map(rowToStop).filter(Boolean);
-    if (!parsed.length) throw new Error('No stop data found in sheet');
+    if (!parsed.length) throw new Error('No stop data found. Keys: ' + Object.keys(json[0]).join(', '));
     RAW = parsed;
+    syncDone(json);
     renderHeader();
     renderSidebar();
     showEmpty();
+    lastDataHash = hashData(json);
+    startPolling();
   } catch(e) {
     showError(e.message || 'Unknown error');
     console.error('Providence Dispatch load error:', e);
   }
 }
-// ── ADD SPIN ANIMATION ──
+
+// ── SPIN ANIMATION ──
 const style = document.createElement('style');
 style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
 document.head.appendChild(style);
