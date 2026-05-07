@@ -22,8 +22,8 @@
     --red: #e05454;
     --amber: #e87c28;
     --text: #dde0ea;
-    --text2: #9499aa;
-    --text3: #5c6070;
+    --text2: #c8ccd8;
+    --text3: #9ea4b5;
     --mono: 'Barlow Condensed', sans-serif;
     --sans: 'Barlow', sans-serif;
   }
@@ -1061,7 +1061,7 @@ function getTempClass(o) {
 }
 
 function hasApptInfo(orders) {
-  const skip = ['CONF RDY','NEED','OK','CONF','REQ',''];
+  const skip = ['CONF RDY','NEED','OK','CONF','REQ','EMAIL REQ',''];
   return orders.some(o => o.appt && !skip.includes(o.appt.toUpperCase().trim()));
 }
 
@@ -1176,7 +1176,7 @@ function buildDetailHTML(key, forModal) {
   const phone = phoneRaw && !/^[a-z]/i.test(phoneRaw) ? phoneRaw.replace(/[^0-9]/g,'') : null;
 
   const pickupDates = [...new Set(g.orders.map(o=>o.pickupDateTime).filter(Boolean))].join(', ');
-  const skip = ['CONF RDY','NEED','OK','CONF','REQ',''];
+  const skip = ['CONF RDY','NEED','OK','CONF','REQ','EMAIL REQ',''];
   const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
 
   const warnOrder = g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'));
