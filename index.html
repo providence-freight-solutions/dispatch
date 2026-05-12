@@ -725,7 +725,6 @@
 
   }
 </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 
@@ -1490,259 +1489,69 @@ function generatePDF() {
   btn.classList.add('loading');
   btn.textContent = 'Generating...';
 
-  setTimeout(function() {
-    try {
-      const { jsPDF } = window.jspdf;
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const driver = DRIVERS.find(d => d.id === activeDriver);
+  const driverName = driver ? driver.name : activeDriver;
 
-      const PW = 612, PH = 792;
-      const ML = 40, MR = 40, MT = 40, MB = 40;
-      const CW = PW - ML - MR;
-      const GOLD = [232, 168, 32];
-      const BLACK = [20, 20, 20];
-      const DKGRAY = [80, 80, 80];
-      const MDGRAY = [130, 130, 130];
-      const LTGRAY = [220, 220, 220];
-      const BGSTOP = [245, 245, 245];
-      const BGAPPT = [255, 248, 220];
+  // Send the raw rows for this driver's stop range to Apps Script for PDF generation
+  const driverDef = DRIVERS.find(d => d.id === activeDriver);
+  const driverRows = RAW.filter(r =>
+    r.tripBreak ||
+    (r.stop >= driverDef.range[0] && r.stop <= driverDef.range[1])
+  );
 
-      const driver = DRIVERS.find(d => d.id === activeDriver);
-      const driverName = driver ? driver.name : activeDriver;
-      const multiTrip = trips.length > 1;
-      const totalW = allGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.weight||0),0),0);
-      const today = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-      const skip = ['CONF RDY','NEED','OK','CONF','REQ','EMAIL REQ',''];
+  // Convert back to raw row objects the Apps Script expects
+  const rowsForScript = driverRows.map(r => {
+    if (r.tripBreak) return {'STOP': 'TRIP_BREAK', 'SHIPPER': ''};
+    return {
+      'STOP':               r.stopVal || '',
+      'SHIPPER':            r.shipper || '',
+      'ADDRESS':            r.address || '',
+      'PHONE NUMBER':       r.phone || '',
+      'CUSTOMER':           r.customer || '',
+      'CONSIGNEE NAME':     r.consignee || '',
+      'DELIVERTY CITY':     r.delCity || '',
+      'DELIVERY ST':        r.delSt || '',
+      'WEIGHT':             r.weight ? String(r.weight) : '',
+      'PL':                 r.pl ? String(r.pl) : '',
+      'PICKUP DATE & TIME': r.pickupDateTime || '',
+      'PO# ':               r.po || '',
+      'BOL #':              r.bol || '',
+      'SHIP REF':           r.shipRef || '',
+      'APPOINTMENT INFO':   r.appt || '',
+    };
+  });
 
-      let y = MT;
-      let pageNum = 1;
+  const url = APPS_SCRIPT_URL
+    + '?action=getPDF'
+    + '&driver=' + encodeURIComponent(driverName)
+    + '&rows=' + encodeURIComponent(JSON.stringify(rowsForScript));
 
-      function rgb(c) { doc.setTextColor(c[0],c[1],c[2]); }
-      function fillRGB(c) { doc.setFillColor(c[0],c[1],c[2]); }
-      function strokeRGB(c) { doc.setDrawColor(c[0],c[1],c[2]); }
-
-      function drawFooter() {
-        doc.setFontSize(7.5);
-        doc.setFont('helvetica','normal');
-        rgb(MDGRAY);
-        doc.text('Providence Freight Solutions', ML, PH - MB + 14);
-        doc.text('Page ' + pageNum, PW - MR, PH - MB + 14, {align:'right'});
-        strokeRGB(LTGRAY);
-        doc.setLineWidth(0.5);
-        doc.line(ML, PH - MB + 6, PW - MR, PH - MB + 6);
-      }
-
-      function newPage() {
-        drawFooter();
-        doc.addPage();
-        pageNum++;
-        y = MT;
-        // Repeat gold bar at top of each page
-        fillRGB(GOLD);
-        doc.rect(ML, y, CW, 2, 'F');
-        y += 10;
-      }
-
-      function needSpace(h) {
-        if (y + h > PH - MB - 20) newPage();
-      }
-
-      // ── COVER HEADER ──
-      fillRGB(GOLD);
-      doc.rect(ML, y, CW, 3, 'F');
-      y += 12;
-
-      doc.setFontSize(20);
-      doc.setFont('helvetica','bold');
-      rgb(BLACK);
-      doc.text(driverName.toUpperCase() + ' — ROUTE SHEET', ML, y);
-      y += 15;
-
-      doc.setFontSize(9);
-      doc.setFont('helvetica','normal');
-      rgb(DKGRAY);
-      doc.text(today, ML, y);
-      y += 11;
-
-      doc.setFontSize(10);
-      doc.setFont('helvetica','bold');
-      rgb(BLACK);
-      const summary = allGroups.length + ' stops  |  ' + totalW.toLocaleString() + ' lbs total' + (multiTrip ? '  |  ' + trips.length + ' trips' : '');
-      doc.text(summary, ML, y);
-      y += 8;
-
-      strokeRGB(LTGRAY);
-      doc.setLineWidth(0.5);
-      doc.line(ML, y, PW - MR, y);
-      y += 12;
-
-      // ── STOPS ──
-      trips.forEach(function(tripGroups, tripIdx) {
-
-        // Trip header
-        if (multiTrip) {
-          needSpace(22);
-          const tripW = tripGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.weight||0),0),0);
-          fillRGB(BLACK);
-          doc.rect(ML, y, CW, 18, 'F');
-          doc.setFontSize(9);
-          doc.setFont('helvetica','bold');
-          rgb(GOLD);
-          doc.text('TRIP ' + (tripIdx+1) + '   |   ' + tripGroups.length + ' stops   |   ' + tripW.toLocaleString() + ' lbs', ML + 8, y + 12);
-          y += 24;
-        }
-
-        tripGroups.forEach(function(g) {
-          const gTotalW  = g.orders.reduce((s,o)=>s+(o.weight||0),0);
-          const gTotalPL = g.orders.reduce((s,o)=>s+(o.pl||0),0);
-          const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
-
-          // ── STOP HEADER ──
-          needSpace(22);
-          fillRGB(BGSTOP);
-          strokeRGB([200,200,200]);
-          doc.setLineWidth(0.5);
-          doc.rect(ML, y, CW, 20, 'FD');
-
-          // Stop number
-          doc.setFontSize(7.5);
-          doc.setFont('helvetica','bold');
-          rgb(MDGRAY);
-          doc.text(stopLabel(g.orders), ML + 6, y + 8);
-
-          // Shipper
-          doc.setFontSize(12);
-          doc.setFont('helvetica','bold');
-          rgb(BLACK);
-          const shipW = CW - 90;
-          const shipLines = doc.splitTextToSize(g.shipper.toUpperCase(), shipW);
-          doc.text(shipLines[0], ML + 6, y + 16);
-
-          // Weight + pallets right
-          doc.setFontSize(10);
-          doc.setFont('helvetica','bold');
-          rgb(BLACK);
-          if (gTotalW > 0) doc.text(gTotalW.toLocaleString() + ' lbs', PW - MR - 6, y + 10, {align:'right'});
-          if (gTotalPL > 0) {
-            doc.setFontSize(8);
-            doc.setFont('helvetica','normal');
-            rgb(DKGRAY);
-            doc.text(gTotalPL + ' PLT', PW - MR - 6, y + 19, {align:'right'});
-          }
-          y += 22;
-
-          // Address + phone on same line
-          needSpace(12);
-          doc.setFontSize(8.5);
-          doc.setFont('helvetica','normal');
-          rgb(DKGRAY);
-          const addrPhone = g.address + (g.phone ? '   |   Tel: ' + g.phone : '');
-          doc.text(addrPhone, ML + 6, y, {maxWidth: CW - 8});
-          y += 11;
-
-          // Appointment bar
-          if (apptInfos.length) {
-            needSpace(14);
-            fillRGB(BGAPPT);
-            strokeRGB(GOLD);
-            doc.setLineWidth(0.7);
-            doc.rect(ML, y, CW, 13, 'FD');
-            doc.setFontSize(8);
-            doc.setFont('helvetica','bold');
-            doc.setTextColor(150, 100, 0);
-            doc.text('APPT: ' + apptInfos.join('  |  '), ML + 6, y + 9);
-            y += 15;
-          }
-
-          y += 3;
-
-          // ── ORDERS ──
-          g.orders.forEach(function(o, oIdx) {
-            // Estimate height needed for this order
-            const fields = [];
-            if (o.po)             fields.push(['PO #',    o.po]);
-            if (o.bol)            fields.push(['BOL',     o.bol]);
-            if (o.shipRef)        fields.push(['REF #',   o.shipRef]);
-            if (o.weight > 0)     fields.push(['WEIGHT',  o.weight.toLocaleString() + ' lbs']);
-            if (o.pl > 0)         fields.push(['PALLETS', o.pl + ' PLT']);
-            if (o.pickupDateTime) fields.push(['PICKUP',  o.pickupDateTime]);
-            const fieldRows = Math.ceil(fields.length / 3);
-            const orderH = 12 + 10 + (fieldRows * 20) + 10;
-
-            needSpace(orderH);
-
-            // Divider between orders
-            if (oIdx > 0) {
-              strokeRGB([210,210,210]);
-              doc.setLineWidth(0.3);
-              doc.line(ML + 6, y, PW - MR - 6, y);
-              y += 6;
-            }
-
-            // Customer name
-            doc.setFontSize(10.5);
-            doc.setFont('helvetica','bold');
-            rgb(BLACK);
-            doc.text(o.customer.toUpperCase(), ML + 8, y);
-            y += 11;
-
-            // Consignee + destination on one line
-            doc.setFontSize(8.5);
-            doc.setFont('helvetica','normal');
-            rgb(DKGRAY);
-            let destParts = [];
-            if (o.consignee && o.consignee !== o.customer) destParts.push(o.consignee);
-            destParts.push(o.delCity + ', ' + o.delSt);
-            doc.text(destParts.join('  >  '), ML + 8, y);
-            y += 11;
-
-            // Fields in 3-column grid
-            if (fields.length > 0) {
-              const colW = CW / 3;
-              for (let row = 0; row < fieldRows; row++) {
-                for (let col = 0; col < 3; col++) {
-                  const fi = row * 3 + col;
-                  if (fi >= fields.length) break;
-                  const fx = ML + 8 + col * colW;
-
-                  // Label
-                  doc.setFontSize(7);
-                  doc.setFont('helvetica','bold');
-                  rgb(MDGRAY);
-                  doc.text(fields[fi][0], fx, y);
-
-                  // Value
-                  doc.setFontSize(10);
-                  doc.setFont('helvetica','bold');
-                  rgb(BLACK);
-                  doc.text(String(fields[fi][1]), fx, y + 10, {maxWidth: colW - 10});
-                }
-                y += 20;
-              }
-            }
-            y += 4;
-          });
-
-          // Bottom rule between stops
-          needSpace(8);
-          strokeRGB(LTGRAY);
-          doc.setLineWidth(0.8);
-          doc.line(ML, y, PW - MR, y);
-          y += 10;
-        });
-      });
-
-      drawFooter();
-
-      doc.save('Providence_' + driverName + '_Route.pdf');
-
-    } catch(err) {
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.pdf) throw new Error('No PDF returned');
+      // Decode base64 and trigger download
+      const binary = atob(data.pdf);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], {type: 'application/pdf'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Providence_' + driverName + '_Route.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    })
+    .catch(err => {
       alert('PDF generation failed: ' + err.message);
       console.error(err);
-    }
-
-    btn.classList.remove('loading');
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Route PDF';
-  }, 50);
+    })
+    .finally(() => {
+      btn.classList.remove('loading');
+      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download PDF';
+    });
 }
 
 // ── INIT ──
