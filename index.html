@@ -926,10 +926,15 @@ async function setDoneOnSheet(stopVal, isDoneVal) {
 // CONSIGNEE NAME | DELIVERTY CITY | DELIVERY ST | PO#  | BOL # | SHIP REF |
 // WEIGHT | PL | APPOINTMENT INFO | PICKED
 function rowToStop(r) {
+  // Normalize lookup: try exact key first, then trimmed, then uppercase-trimmed
   const get = (...keys) => {
     for (const k of keys) {
-      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
-        return String(r[k]).trim();
+      // Exact match
+      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') return String(r[k]).trim();
+      // Trimmed match (handles trailing/leading spaces in header names)
+      const trimK = k.trim();
+      for (const rk of Object.keys(r)) {
+        if (rk.trim() === trimK && String(r[rk]).trim() !== '') return String(r[rk]).trim();
       }
     }
     return '';
@@ -1489,64 +1494,42 @@ function generatePDF() {
   btn.classList.add('loading');
   btn.textContent = 'Generating...';
 
-  const driver = DRIVERS.find(d => d.id === activeDriver);
-  const driverName = driver ? driver.name : activeDriver;
-
-  // Send the raw rows for this driver's stop range to Apps Script for PDF generation
   const driverDef = DRIVERS.find(d => d.id === activeDriver);
-  const driverRows = RAW.filter(r =>
-    r.tripBreak ||
-    (r.stop >= driverDef.range[0] && r.stop <= driverDef.range[1])
-  );
+  const driverName = driverDef ? driverDef.name : activeDriver;
+  const rangeMin = driverDef.range[0];
+  const rangeMax = driverDef.range[1];
 
-  // Convert back to raw row objects the Apps Script expects
-  const rowsForScript = driverRows.map(r => {
-    if (r.tripBreak) return {'STOP': 'TRIP_BREAK', 'SHIPPER': ''};
-    return {
-      'STOP':               r.stopVal || '',
-      'SHIPPER':            r.shipper || '',
-      'ADDRESS':            r.address || '',
-      'PHONE NUMBER':       r.phone || '',
-      'CUSTOMER':           r.customer || '',
-      'CONSIGNEE NAME':     r.consignee || '',
-      'DELIVERTY CITY':     r.delCity || '',
-      'DELIVERY ST':        r.delSt || '',
-      'WEIGHT':             r.weight ? String(r.weight) : '',
-      'PL':                 r.pl ? String(r.pl) : '',
-      'PICKUP DATE & TIME': r.pickupDateTime || '',
-      'PO# ':               r.po || '',
-      'BOL #':              r.bol || '',
-      'SHIP REF':           r.shipRef || '',
-      'APPOINTMENT INFO':   r.appt || '',
-    };
-  });
-
+  // Just send driver name + stop range — Apps Script reads the sheet itself
   const url = APPS_SCRIPT_URL
     + '?action=getPDF'
     + '&driver=' + encodeURIComponent(driverName)
-    + '&rows=' + encodeURIComponent(JSON.stringify(rowsForScript));
+    + '&rangeMin=' + rangeMin
+    + '&rangeMax=' + rangeMax;
 
   fetch(url)
-    .then(r => r.json())
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
     .then(data => {
-      if (!data.pdf) throw new Error('No PDF returned');
-      // Decode base64 and trigger download
+      if (data.error) throw new Error(data.error);
+      if (!data.pdf) throw new Error('No PDF in response');
       const binary = atob(data.pdf);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       const blob = new Blob([bytes], {type: 'application/pdf'});
-      const url = URL.createObjectURL(blob);
+      const dlUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
+      a.href = dlUrl;
       a.download = 'Providence_' + driverName + '_Route.pdf';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(dlUrl);
     })
     .catch(err => {
       alert('PDF generation failed: ' + err.message);
-      console.error(err);
+      console.error('PDF error:', err);
     })
     .finally(() => {
       btn.classList.remove('loading');
