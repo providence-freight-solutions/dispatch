@@ -1,0 +1,25 @@
+{
+  "name": "Providence Dispatch",
+  "short_name": "Providence",
+  "description": "Providence Freight Solutions \u2014 Driver Dispatch",
+  "display": "standalone",
+  "background_color": "#0a0a0b",
+  "theme_color": "#0a0a0b",
+  "orientation": "portrait-primary",
+  "start_url": ".",
+  "scope": ".",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
