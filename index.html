@@ -665,6 +665,163 @@
     .order-count { font-size: 11px; }
     /* make stop list taller and touch-friendly */
     .sidebar { min-height: calc(100vh - 80px); }
+
+
+  /* ── PRINT STYLES ── */
+  .print-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--text2);
+    cursor: pointer;
+    white-space: nowrap;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.12s;
+  }
+  .print-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+  @media print {
+    /* Hide everything except print content */
+    header, .sidebar, .modal-overlay, .prog-bar,
+    .detail-actions, .phone-block, #update-toast { display: none !important; }
+
+    body { background: #fff !important; color: #000 !important; font-family: Arial, sans-serif; }
+
+    .app { display: block !important; }
+    .main { padding: 0 !important; overflow: visible !important; }
+
+    /* Show print sheet instead of normal main panel */
+    #mainPanel { display: none !important; }
+    #printSheet { display: block !important; }
+
+    @page {
+      size: letter portrait;
+      margin: 0.6in 0.5in;
+    }
+  }
+
+  /* Print sheet — hidden on screen, visible when printing */
+  #printSheet {
+    display: none;
+    font-family: Arial, sans-serif;
+    color: #000;
+    background: #fff;
+  }
+
+  .print-page {
+    page-break-after: always;
+    padding: 0;
+  }
+
+  .print-page:last-child { page-break-after: avoid; }
+
+  .print-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    border-bottom: 3px solid #000;
+    padding-bottom: 10px;
+    margin-bottom: 14px;
+  }
+
+  .print-company { font-size: 11px; font-weight: bold; letter-spacing: 0.15em; text-transform: uppercase; color: #555; }
+  .print-driver  { font-size: 22px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; margin: 2px 0; }
+  .print-date    { font-size: 11px; color: #555; }
+  .print-summary { text-align: right; font-size: 12px; }
+  .print-summary strong { font-size: 18px; display: block; }
+
+  .print-trip-header {
+    background: #000;
+    color: #fff;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    margin: 16px 0 8px;
+  }
+
+  .print-stop {
+    border: 1.5px solid #000;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-stop-header {
+    background: #f0f0f0;
+    border-bottom: 1.5px solid #000;
+    padding: 7px 10px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .print-stop-num  { font-size: 11px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; color: #555; flex-shrink: 0; }
+  .print-stop-name { font-size: 17px; font-weight: bold; text-transform: uppercase; flex: 1; }
+  .print-stop-wt   { font-size: 13px; font-weight: bold; text-align: right; flex-shrink: 0; }
+
+  .print-stop-addr { padding: 5px 10px 0; font-size: 12px; color: #333; }
+  .print-stop-phone { padding: 2px 10px 6px; font-size: 12px; color: #333; }
+
+  .print-orders { padding: 0 8px 8px; }
+
+  .print-order {
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    margin-top: 6px;
+    padding: 7px 10px;
+  }
+
+  .print-order-customer { font-size: 14px; font-weight: bold; text-transform: uppercase; margin-bottom: 3px; }
+  .print-order-dest     { font-size: 12px; color: #333; margin-bottom: 5px; }
+
+  .print-fields { display: flex; flex-wrap: wrap; gap: 10px 24px; }
+
+  .print-field-lbl { font-size: 9px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.1em; color: #777; }
+  .print-field-val { font-size: 14px; font-weight: bold; }
+
+  .print-appt {
+    background: #fff8e1;
+    border: 1px solid #e8a820;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 5px;
+    display: inline-block;
+  }
+
+  .print-pickup-time {
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 5px;
+    display: inline-block;
+  }
+
+  .print-footer {
+    border-top: 1px solid #ccc;
+    margin-top: 20px;
+    padding-top: 8px;
+    font-size: 10px;
+    color: #777;
+    display: flex;
+    justify-content: space-between;
+  }
+
   }
 </style>
 </head>
@@ -680,6 +837,7 @@
   </div>
   <div class="driver-tabs" id="driverTabs"></div>
   <div class="header-stats" id="headerStats"></div>
+  <button class="print-btn" onclick="printRoute()" title="Print route sheet">🖨 Print</button>
 </header>
 
 <!-- ── MOBILE MODAL ── -->
@@ -691,6 +849,7 @@
   </div>
 </div>
 
+<div id="printSheet"></div>
 <div class="app">
   <aside class="sidebar">
     <div class="sidebar-hdr">
@@ -1411,6 +1570,99 @@ async function loadData() {
 const style = document.createElement('style');
 style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
 document.head.appendChild(style);
+
+// ── PRINT ──
+function printRoute() {
+  const trips = getTripsForDriver(activeDriver);
+  const allGroups = trips.flat();
+  if (!allGroups.length) { alert('No stops to print for this driver.'); return; }
+
+  const driverName = DRIVERS.find(d => d.id === activeDriver)?.name || activeDriver;
+  const today = new Date().toLocaleDateString('en-US', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
+  const totalW = allGroups.reduce((s,g) => s + g.orders.reduce((s2,o) => s2+(o.weight||0), 0), 0);
+  const multiTrip = trips.length > 1;
+  const skip = ['CONF RDY','NEED','OK','CONF','REQ','EMAIL REQ',''];
+
+  function field(label, value) {
+    if (!value) return '';
+    return '<div class="print-field"><div class="print-field-lbl">' + label + '</div><div class="print-field-val">' + value + '</div></div>';
+  }
+
+  let stopsHtml = '';
+
+  trips.forEach(function(tripGroups, tripIdx) {
+    if (multiTrip) {
+      const tripW = tripGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.weight||0),0),0);
+      stopsHtml += '<div class="print-trip-header">&#9654; Trip ' + (tripIdx+1)
+        + ' &nbsp;&mdash;&nbsp; ' + tripGroups.length + ' stop' + (tripGroups.length>1?'s':'')
+        + ' &nbsp;&mdash;&nbsp; ' + tripW.toLocaleString() + ' lbs</div>';
+    }
+
+    tripGroups.forEach(function(g) {
+      const totalW = g.orders.reduce((s,o)=>s+(o.weight||0),0);
+      const totalPL = g.orders.reduce((s,o)=>s+(o.pl||0),0);
+      const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
+
+      const ordersHtml = g.orders.map(function(o) {
+        const consignee = o.consignee && o.consignee !== o.customer
+          ? '<div class="print-order-dest">&rarr; ' + o.consignee + ' &nbsp;&bull;&nbsp; ' + o.delCity + ', ' + o.delSt + '</div>'
+          : '<div class="print-order-dest">' + o.delCity + ', ' + o.delSt + '</div>';
+
+        return '<div class="print-order">'
+          + '<div class="print-order-customer">' + o.customer + '</div>'
+          + consignee
+          + '<div class="print-fields">'
+            + field('PO #', o.po)
+            + field('BOL', o.bol)
+            + field('Ref #', o.shipRef)
+            + field('Weight', o.weight > 0 ? o.weight.toLocaleString() + ' lbs' : '')
+            + field('Pallets', o.pl > 0 ? o.pl + ' PLT' : '')
+          + '</div>'
+          + (o.pickupDateTime ? '<div class="print-pickup-time">&#128336; Pickup: ' + o.pickupDateTime + '</div>' : '')
+        + '</div>';
+      }).join('');
+
+      const apptHtml = apptInfos.length
+        ? '<div class="print-appt">&#128203; ' + apptInfos.join(' &middot; ') + '</div>'
+        : '';
+
+      stopsHtml += '<div class="print-stop">'
+        + '<div class="print-stop-header">'
+          + '<div class="print-stop-num">' + stopLabel(g.orders) + '</div>'
+          + '<div class="print-stop-name">' + g.shipper + '</div>'
+          + '<div class="print-stop-wt">' + (totalW > 0 ? totalW.toLocaleString() + ' lbs' : '') + (totalPL > 0 ? '<br>' + totalPL + ' PLT' : '') + '</div>'
+        + '</div>'
+        + '<div class="print-stop-addr">' + g.address + '</div>'
+        + (g.phone ? '<div class="print-stop-phone">&#128222; ' + g.phone + '</div>' : '<div style="padding-bottom:4px"></div>')
+        + (apptHtml ? '<div style="padding:0 10px 6px">' + apptHtml + '</div>' : '')
+        + '<div class="print-orders">' + ordersHtml + '</div>'
+      + '</div>';
+    });
+  });
+
+  document.getElementById('printSheet').innerHTML =
+    '<div class="print-page">'
+      + '<div class="print-header">'
+        + '<div>'
+          + '<div class="print-company">Providence Freight Solutions</div>'
+          + '<div class="print-driver">' + driverName + ' Route</div>'  
+          + '<div class="print-date">' + today + '</div>'
+        + '</div>'
+        + '<div class="print-summary">'
+          + '<strong>' + allGroups.length + ' stops</strong>'
+          + totalW.toLocaleString() + ' lbs total'
+          + (multiTrip ? '<br>' + trips.length + ' trips' : '')
+        + '</div>'
+      + '</div>'
+      + stopsHtml
+      + '<div class="print-footer">'
+        + '<span>Providence Freight Solutions &mdash; Confidential</span>'
+        + '<span>Printed ' + today + '</span>'
+      + '</div>'
+    + '</div>';
+
+  window.print();
+}
 
 // ── INIT ──
 loadData();
