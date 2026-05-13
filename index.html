@@ -725,6 +725,7 @@
 
   }
 </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 
@@ -1183,15 +1184,29 @@ function renderSidebar() {
     empty.textContent = 'NO STOPS ASSIGNED';
     frag.appendChild(empty);
   } else if (!multiTrip) {
+    // Single trip — show a summary header before the stop list
+    const totalW  = allGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.weight||0); },0); }, 0);
+    const totalPL = allGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.pl||0); },0); }, 0);
+    const doneCount = allGroups.filter(g=>isDone(g)).length;
+    const hdr = document.createElement('div');
+    hdr.className = 'trip-header';
+    hdr.innerHTML = '<span class="trip-label">&#9654; ROUTE</span>'
+      + '<span class="trip-meta">' + doneCount + '/' + allGroups.length + ' stops'
+      + ' &nbsp;&middot;&nbsp; ' + totalW.toLocaleString() + ' lbs'
+      + (totalPL > 0 ? ' &nbsp;&middot;&nbsp; ' + totalPL + ' PLT' : '') + '</span>';
+    frag.appendChild(hdr);
     allGroups.forEach(g => frag.appendChild(renderGroup(g)));
   } else {
     trips.forEach(function(tripGroups, idx) {
       const doneCount = tripGroups.filter(g=>isDone(g)).length;
-      const tripW = tripGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.weight||0); },0); }, 0);
+      const tripW  = tripGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.weight||0); },0); }, 0);
+      const tripPL = tripGroups.reduce(function(s,g){ return s + g.orders.reduce(function(s2,o){ return s2+(o.pl||0); },0); }, 0);
       const hdr = document.createElement('div');
       hdr.className = 'trip-header';
       hdr.innerHTML = '<span class="trip-label">&#9654; TRIP ' + (idx+1) + '</span>'
-        + '<span class="trip-meta">' + doneCount + '/' + tripGroups.length + ' stops &nbsp;&middot;&nbsp; ' + tripW.toLocaleString() + ' lbs</span>';
+        + '<span class="trip-meta">' + doneCount + '/' + tripGroups.length + ' stops'
+        + ' &nbsp;&middot;&nbsp; ' + tripW.toLocaleString() + ' lbs'
+        + (tripPL > 0 ? ' &nbsp;&middot;&nbsp; ' + tripPL + ' PLT' : '') + '</span>';
       frag.appendChild(hdr);
       tripGroups.forEach(g => frag.appendChild(renderGroup(g)));
     });
@@ -1493,47 +1508,223 @@ function generatePDF() {
   btn.classList.add('loading');
   btn.textContent = 'Generating...';
 
-  const driverDef = DRIVERS.find(d => d.id === activeDriver);
-  const driverName = driverDef ? driverDef.name : activeDriver;
-  const rangeMin = driverDef.range[0];
-  const rangeMax = driverDef.range[1];
+  setTimeout(function() {
+    try {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
 
-  // Just send driver name + stop range — Apps Script reads the sheet itself
-  const url = APPS_SCRIPT_URL
-    + '?action=getPDF'
-    + '&driver=' + encodeURIComponent(driverName)
-    + '&rangeMin=' + rangeMin
-    + '&rangeMax=' + rangeMax;
+      const PW = 612, PH = 792;
+      const ML = 36, MR = 36, MT = 36, MB = 48;
+      const CW = PW - ML - MR;
+      const SKIP = ['CONF RDY','NEED','OK','CONF','REQ','EMAIL REQ',''];
 
-  fetch(url)
-    .then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(data => {
-      if (data.error) throw new Error(data.error);
-      if (!data.pdf) throw new Error('No PDF in response');
-      const binary = atob(data.pdf);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], {type: 'application/pdf'});
-      const dlUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = dlUrl;
-      a.download = 'Providence_' + driverName + '_Route.pdf';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(dlUrl);
-    })
-    .catch(err => {
+      const driverDef = DRIVERS.find(d => d.id === activeDriver);
+      const driverName = driverDef ? driverDef.name : activeDriver;
+      const multiTrip = trips.length > 1;
+      const totalW  = allGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.weight||0),0),0);
+      const totalPL = allGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.pl||0),0),0);
+      const today = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+
+      let y = MT;
+      let pageNum = 1;
+
+      // ── helpers ──
+      function C(hex) {
+        const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+        return [r,g,b];
+      }
+      function setFill(hex)   { const c=C(hex); doc.setFillColor(c[0],c[1],c[2]); }
+      function setStroke(hex) { const c=C(hex); doc.setDrawColor(c[0],c[1],c[2]); }
+      function setTxt(hex)    { const c=C(hex); doc.setTextColor(c[0],c[1],c[2]); }
+
+      function drawPageFooter() {
+        setStroke('#DDDDDD'); doc.setLineWidth(0.5);
+        doc.line(ML, PH - MB + 8, PW - MR, PH - MB + 8);
+        doc.setFontSize(7.5); doc.setFont('helvetica','normal'); setTxt('#999999');
+        doc.text('Providence Freight Solutions — Confidential', ML, PH - MB + 18);
+        doc.text('Page ' + pageNum, PW - MR, PH - MB + 18, {align:'right'});
+      }
+
+      function newPage() {
+        drawPageFooter();
+        doc.addPage(); pageNum++;
+        y = MT;
+        // Gold bar on continuation pages
+        setFill('#E8A820'); doc.rect(ML, y, CW, 2, 'F');
+        y += 10;
+      }
+
+      function need(h) { if (y + h > PH - MB - 10) newPage(); }
+
+      function text(str, x, yy, opts) { doc.text(String(str||''), x, yy, opts||{}); }
+
+      // ── DOCUMENT HEADER ──
+      setFill('#E8A820'); doc.rect(ML, y, CW, 3, 'F');
+      y += 12;
+
+      doc.setFontSize(9); doc.setFont('helvetica','bold'); setTxt('#888888');
+      text('PROVIDENCE FREIGHT SOLUTIONS', ML, y);
+      y += 11;
+
+      doc.setFontSize(20); doc.setFont('helvetica','bold'); setTxt('#141414');
+      text(driverName.toUpperCase() + ' — ROUTE SHEET', ML, y);
+      y += 14;
+
+      doc.setFontSize(9); doc.setFont('helvetica','normal'); setTxt('#555555');
+      text(today, ML, y);
+      y += 10;
+
+      doc.setFontSize(10); doc.setFont('helvetica','bold'); setTxt('#141414');
+      const summaryLine = allGroups.length + ' stops  |  ' + totalW.toLocaleString() + ' lbs'
+        + (totalPL > 0 ? '  |  ' + totalPL + ' PLT' : '')
+        + (multiTrip ? '  |  ' + trips.length + ' trips' : '');
+      text(summaryLine, ML, y);
+      y += 8;
+
+      setStroke('#E8A820'); doc.setLineWidth(1.5);
+      doc.line(ML, y, PW - MR, y);
+      y += 14;
+
+      // ── TRIPS & STOPS ──
+      trips.forEach(function(tripGroups, tripIdx) {
+
+        // Trip / Route header bar
+        const tripW  = tripGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.weight||0),0),0);
+        const tripPL = tripGroups.reduce((s,g)=>s+g.orders.reduce((s2,o)=>s2+(o.pl||0),0),0);
+        need(22);
+        setFill('#1E1E1E'); doc.rect(ML, y, CW, 18, 'F');
+        doc.setFontSize(9); doc.setFont('helvetica','bold'); setTxt('#E8A820');
+        const tripLabel = multiTrip ? 'TRIP ' + (tripIdx+1) : 'ROUTE';
+        text(tripLabel, ML + 8, y + 12);
+        doc.setFont('helvetica','normal'); setTxt('#AAAAAA');
+        const tripMeta = tripGroups.length + ' stops  |  ' + tripW.toLocaleString() + ' lbs'
+          + (tripPL > 0 ? '  |  ' + tripPL + ' PLT' : '');
+        text(tripMeta, PW - MR - 8, y + 12, {align:'right'});
+        y += 24;
+
+        tripGroups.forEach(function(g) {
+          const gW  = g.orders.reduce((s,o)=>s+(o.weight||0),0);
+          const gPL = g.orders.reduce((s,o)=>s+(o.pl||0),0);
+          const appts = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!SKIP.includes(a.toUpperCase().trim())))];
+          const pickups = [...new Set(g.orders.map(o=>o.pickupDateTime).filter(Boolean))];
+
+          // Estimate height of this stop block
+          const orderH = g.orders.reduce(function(s, o) {
+            const fields = [o.po, o.bol, o.shipRef].filter(Boolean);
+            return s + 14 + 10 + (fields.length > 0 ? Math.ceil(fields.length/3)*18 : 0) + 8;
+          }, 0);
+          const stopH = 22 + 12 + (g.phone ? 0 : 0) + (appts.length ? 14 : 0) + (pickups.length ? 12 : 0) + 6 + orderH + 12;
+          need(Math.min(stopH, PH - MB - MT - 30));
+
+          // Stop header
+          setFill('#F0F0F0'); setStroke('#C8C8C8'); doc.setLineWidth(0.5);
+          doc.rect(ML, y, CW, 20, 'FD');
+
+          doc.setFontSize(7.5); doc.setFont('helvetica','bold'); setTxt('#888888');
+          text(stopLabel(g.orders), ML + 6, y + 9);
+
+          doc.setFontSize(12); doc.setFont('helvetica','bold'); setTxt('#141414');
+          const shipLines = doc.splitTextToSize(g.shipper.toUpperCase(), CW - 120);
+          text(shipLines[0], ML + 6, y + 17);
+
+          doc.setFontSize(10); doc.setFont('helvetica','bold'); setTxt('#141414');
+          if (gW > 0) text(gW.toLocaleString() + ' lbs', PW - MR - 6, y + 10, {align:'right'});
+          if (gPL > 0) {
+            doc.setFontSize(8); doc.setFont('helvetica','normal'); setTxt('#888888');
+            text(gPL + ' PLT', PW - MR - 6, y + 19, {align:'right'});
+          }
+          y += 23;
+
+          // Address + phone
+          doc.setFontSize(8.5); doc.setFont('helvetica','normal'); setTxt('#444444');
+          const addrPhone = g.address + (g.phone ? '   |   Tel: ' + g.phone : '');
+          text(addrPhone, ML + 6, y, {maxWidth: CW - 10});
+          y += 11;
+
+          // Pickup date/time summary
+          if (pickups.length) {
+            doc.setFontSize(8.5); doc.setFont('helvetica','bold'); setTxt('#444444');
+            text('Pickup: ' + pickups.join(', '), ML + 6, y);
+            y += 11;
+          }
+
+          // Appointment
+          if (appts.length) {
+            setFill('#FFF8DC'); setStroke('#E8A820'); doc.setLineWidth(0.7);
+            doc.rect(ML, y, CW, 13, 'FD');
+            doc.setFontSize(8); doc.setFont('helvetica','bold'); setTxt('#7A5500');
+            text('APPT: ' + appts.join('  |  '), ML + 6, y + 9);
+            y += 15;
+          }
+
+          y += 3;
+
+          // Orders
+          g.orders.forEach(function(o, oIdx) {
+            const fields = [];
+            if (o.po)      fields.push(['PO #',   o.po]);
+            if (o.bol)     fields.push(['BOL',    o.bol]);
+            if (o.shipRef) fields.push(['REF #',  o.shipRef]);
+            const fieldRows = fields.length > 0 ? Math.ceil(fields.length/3) : 0;
+            const oH = 13 + 10 + (fieldRows * 18) + 8;
+            need(oH);
+
+            if (oIdx > 0) {
+              setStroke('#E0E0E0'); doc.setLineWidth(0.3);
+              doc.line(ML + 6, y, PW - MR - 6, y);
+              y += 6;
+            }
+
+            // Customer
+            doc.setFontSize(11); doc.setFont('helvetica','bold'); setTxt('#141414');
+            text(o.customer.toUpperCase(), ML + 8, y);
+            y += 12;
+
+            // Destination
+            doc.setFontSize(8.5); doc.setFont('helvetica','normal'); setTxt('#555555');
+            const dest = (o.consignee && o.consignee !== o.customer)
+              ? o.consignee + '  >  ' + o.delCity + ', ' + o.delSt
+              : o.delCity + ', ' + o.delSt;
+            text(dest, ML + 8, y, {maxWidth: CW - 16});
+            y += 11;
+
+            // Fields grid (PO / BOL / REF only)
+            if (fields.length > 0) {
+              const colW = CW / 3;
+              for (let row = 0; row < fieldRows; row++) {
+                for (let col = 0; col < 3; col++) {
+                  const fi = row * 3 + col;
+                  if (fi >= fields.length) continue;
+                  const fx = ML + 8 + col * colW;
+                  doc.setFontSize(7); doc.setFont('helvetica','bold'); setTxt('#888888');
+                  text(fields[fi][0], fx, y);
+                  doc.setFontSize(10); doc.setFont('helvetica','bold'); setTxt('#141414');
+                  text(fields[fi][1], fx, y + 10, {maxWidth: colW - 10});
+                }
+                y += 18;
+              }
+            }
+            y += 4;
+          });
+
+          // Stop bottom rule
+          setStroke('#CCCCCC'); doc.setLineWidth(0.8);
+          doc.line(ML, y, PW - MR, y);
+          y += 12;
+        });
+      });
+
+      drawPageFooter();
+      doc.save('Providence_' + driverName + '_Route.pdf');
+
+    } catch(err) {
       alert('PDF generation failed: ' + err.message);
       console.error('PDF error:', err);
-    })
-    .finally(() => {
-      btn.classList.remove('loading');
-      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download PDF';
-    });
+    }
+
+    btn.classList.remove('loading');
+    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download PDF';
+  }, 50);
 }
 
 // ── INIT ──
