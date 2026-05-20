@@ -307,6 +307,7 @@
   .chip-frozen { background: rgba(76,168,212,0.12); color: var(--blue); border: 1px solid rgba(76,168,212,0.25); }
   .chip-cold { background: rgba(77,191,127,0.1); color: var(--green); border: 1px solid rgba(77,191,127,0.2); }
   .chip-dry { background: rgba(232,168,32,0.1); color: var(--gold); border: 1px solid rgba(232,168,32,0.2); }
+  .chip-cash { background: rgba(86,212,139,0.12); color: #56d48b; border: 1px solid rgba(86,212,139,0.3); font-weight: 800; }
   .chip-appt { background: rgba(232,168,32,0.08); color: var(--gold2); border: 1px solid rgba(232,168,32,0.15); }
   .chip-warn { background: rgba(232,124,40,0.1); color: var(--amber); border: 1px solid rgba(232,124,40,0.2); }
 
@@ -446,6 +447,7 @@
     gap: 8px;
   }
   .alert-warn { background: rgba(232,124,40,0.08); border: 1px solid rgba(232,124,40,0.25); color: var(--amber); }
+  .alert-cash { background: rgba(86,212,139,0.08); border: 1px solid rgba(86,212,139,0.35); color: #56d48b; font-size: 13px; font-weight: 700; letter-spacing: 0.03em; }
 
   /* summary bar */
   .summary-bar {
@@ -799,6 +801,7 @@ const DRIVERS = [
 
 // ── STATE ──
 let RAW = [];
+let CASH_FLAGS = {}; // { "SHIPPER NAME UPPERCASE": { message, amount } }
 let activeDriver = "johnny";
 let activeKey = null;
 let done = {}; // { "STOP 01": true, ... } — synced across all users via Google Sheet
@@ -828,12 +831,14 @@ function startPolling() {
       if (newHash === lastDataHash) return; // nothing changed
       lastDataHash = newHash;
 
-      const parsed = parseRows(json);
+      const pollRows = Array.isArray(json) ? json : (json.rows || []);
+      CASH_FLAGS = Array.isArray(json) ? {} : (json.cashFlags || {});
+      const parsed = parseRows(pollRows);
       if (!parsed.length) return;
 
       const prevRAW = RAW;
       RAW = parsed;
-      syncDone(json);
+      syncDone(pollRows);
       renderHeader();
       renderSidebar();
 
@@ -1109,6 +1114,11 @@ function getTripsForDriver(id) {
   });
 }
 
+function getCashFlag(shipperName) {
+  if (!shipperName || !CASH_FLAGS) return null;
+  return CASH_FLAGS[shipperName.trim().toUpperCase()] || null;
+}
+
 function gKey(g) { return g.tripIndex + '|' + g.address.trim().toLowerCase().replace(/\s+/g,' '); }
 
 function isDone(g) {
@@ -1159,6 +1169,8 @@ function renderSidebar() {
     temps.forEach(t => { chips += chip(t, t); });
     if (apptFlag) chips += chip('appt', 'APPT');
     if (warnFlag) chips += chip('warn', '&#9888; WARNING');
+    const cashFlag = getCashFlag(g.shipper);
+    if (cashFlag) chips += chip('cash', '&#x1F4B5; CASH' + (cashFlag.amount ? ' ' + cashFlag.amount : ''));
     const addrShort = g.address.split(',').slice(-1)[0].trim() || g.address;
     const el = document.createElement('div');
     el.className = 'stop-item' + (active ? ' active' : '') + (d ? ' done' : '');
@@ -1266,9 +1278,13 @@ function buildDetailHTML(key, forModal) {
   const apptInfos = [...new Set(g.orders.map(o=>o.appt).filter(a=>a&&!skip.includes(a.toUpperCase().trim())))];
 
   const warnOrder = g.orders.find(o=>(o.appt||'').toUpperCase().includes('CANCEL'));
-  const alertsHTML = warnFlag
+  const cashFlag2 = getCashFlag(g.shipper);
+  const alertsHTML = (warnFlag
     ? '<div class="alert-banner alert-warn">&#9888; ' + (warnOrder ? warnOrder.appt : '') + ' &mdash; Verify before pickup</div>'
-    : '';
+    : '')
+    + (cashFlag2
+    ? '<div class="alert-banner alert-cash">&#x1F4B5; ' + cashFlag2.message + '</div>'
+    : '');
   const apptHTML = apptInfos.length
     ? '<div class="appt-block">&#128203; ' + apptInfos.join(' &middot; ') + '</div>'
     : '';
@@ -1467,13 +1483,15 @@ async function loadData() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     if (!Array.isArray(json) || !json.length) throw new Error('Sheet returned no data');
-    const parsed = parseRows(json);
-    if (!parsed.length) throw new Error('No stop data found. Keys: ' + Object.keys(json[0]).join(', '));
+    const responseRows = Array.isArray(json) ? json : (json.rows || []);
+    CASH_FLAGS = Array.isArray(json) ? {} : (json.cashFlags || {});
+    const parsed = parseRows(responseRows);
+    if (!parsed.length) throw new Error('No stop data found. Keys: ' + (responseRows.length ? Object.keys(responseRows[0]).join(', ') : 'empty'));
     // Clear loading message timer
     if (window._loadingTimer) { clearInterval(window._loadingTimer); window._loadingTimer = null; }
 
     RAW = parsed;
-    syncDone(json);
+    syncDone(responseRows);
 
     // Apply URL hash to jump to correct driver (e.g. #chn, #johnny)
     const hash = window.location.hash.replace('#','').toLowerCase().trim();
