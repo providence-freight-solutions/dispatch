@@ -812,7 +812,8 @@ let lastDataHash = '';
 
 function hashData(json) {
   // Quick fingerprint of the data to detect any change
-  return JSON.stringify(json.map(r => ({
+  const hashRows = Array.isArray(json) ? json : (json.rows || []);
+  return JSON.stringify(hashRows.map(r => ({
     s: r['STOP'], w: r['WEIGHT'], p: r['PICKED'],
     a: r['APPOINTMENT INFO'], ph: r['PHONE NUMBER']
   })));
@@ -825,7 +826,7 @@ function startPolling() {
       const resp = await fetch(APPS_SCRIPT_URL + '?t=' + Date.now()); // cache-bust
       if (!resp.ok) return;
       const json = await resp.json();
-      if (!Array.isArray(json) || !json.length) return;
+      if (!json || (Array.isArray(json) && !json.length) || (!Array.isArray(json) && !json.rows)) return;
 
       const newHash = hashData(json);
       if (newHash === lastDataHash) return; // nothing changed
@@ -909,7 +910,8 @@ function showUpdateToast() {
 
 function syncDone(json) {
   done = {};
-  json.forEach(r => {
+  const syncRows = Array.isArray(json) ? json : (json.rows || []);
+  syncRows.forEach(r => {
     const stop = (r['STOP'] || '').trim();
     const picked = (r['PICKED'] || '').trim().toUpperCase();
     if (stop && picked === 'DONE') done[stop] = true;
@@ -1482,7 +1484,7 @@ async function loadData() {
     const resp = await fetch(APPS_SCRIPT_URL); // no cache-bust — allows Apps Script cache to serve fast
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
-    if (!Array.isArray(json) || !json.length) throw new Error('Sheet returned no data');
+    if (!json || (Array.isArray(json) && !json.length) || (!Array.isArray(json) && !json.rows)) throw new Error('Sheet returned no data');
     const responseRows = Array.isArray(json) ? json : (json.rows || []);
     CASH_FLAGS = Array.isArray(json) ? {} : (json.cashFlags || {});
     const parsed = parseRows(responseRows);
