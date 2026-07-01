@@ -791,12 +791,12 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzR76UlgWFXKhCH
 
 // ── DRIVER CONFIG ──
 const DRIVERS = [
-  {id:"mike",      name:"Mike",       range:[1,  20]},
-  {id:"newdriver", name:"James",      range:[21, 40]},
-  {id:"johnny",    name:"Shawn",      range:[41, 60]},
-  {id:"chentos",   name:"Chentos",    range:[61, 80]},
-  {id:"chn",       name:"CHN 1",      range:[81, 100]},
-  {id:"john",      name:"CHN 2",      range:[101,130]},
+  {id:"mike",      name:"Mike",       hash:"mike",    range:[1,  20]},
+  {id:"newdriver", name:"James",      hash:"james",   range:[21, 40]},
+  {id:"johnny",    name:"Shawn",      hash:"shawn",   range:[41, 60]},
+  {id:"chentos",   name:"Chentos",    hash:"chentos", range:[61, 80]},
+  {id:"chn",       name:"CHN 1",      hash:"chn1",    range:[81, 100]},
+  {id:"john",      name:"CHN 2",      hash:"chn2",    range:[101,130]},
 ];
 
 // ── STATE ──
@@ -1362,7 +1362,8 @@ function renderDetail(key) {
 function setDriver(id) {
   activeDriver = id;
   activeKey = null;
-  history.replaceState(null, '', '#' + id);
+  const d = DRIVERS.find(x => x.id === id);
+  history.replaceState(null, '', '#' + (d ? d.hash : id));
   renderHeader();
   renderSidebar();
   showEmpty();
@@ -1495,10 +1496,11 @@ async function loadData() {
     RAW = parsed;
     syncDone(responseRows);
 
-    // Apply URL hash to jump to correct driver (e.g. #chn, #johnny)
+    // Apply URL hash to jump to correct driver (e.g. #shawn, #chn1)
     const hash = window.location.hash.replace('#','').toLowerCase().trim();
-    if (hash && DRIVERS.find(d => d.id === hash)) {
-      activeDriver = hash;
+    if (hash) {
+      const match = DRIVERS.find(d => d.hash === hash) || DRIVERS.find(d => d.id === hash);
+      if (match) activeDriver = match.id;
     }
 
     renderHeader();
